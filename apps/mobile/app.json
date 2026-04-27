@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "FindIt",
+    "slug": "findit",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "icon": "./assets/icon.png",
+      "infoPlist": {
+        "NSCameraUsageDescription": "FindIt uses the camera to record where household items are stored.",
+        "NSPhotoLibraryUsageDescription": "FindIt lets you choose photos to record where household items are stored."
+      },
+      "bundleIdentifier": "top.fangnale"
+    },
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES"
+      ]
+    },
+    "extra": {
+      "apiPort": 4000,
+      "eas": {
+        "projectId": "fce39d55-e1da-4488-9dee-204eeb7a48c3"
+      }
+    },
+    "owner": "zetacoler"
+  }
+}

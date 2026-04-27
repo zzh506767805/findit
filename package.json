@@ -1,0 +1,15 @@
+{
+  "name": "findit",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/api",
+    "apps/mobile"
+  ],
+  "scripts": {
+    "dev:api": "npm --workspace apps/api run dev",
+    "dev:mobile": "npm --workspace apps/mobile run start",
+    "dev:mobile:lan": "npm --workspace apps/mobile run start -- --host lan",
+    "check": "npm --workspace apps/api run check && npm --workspace apps/mobile run check"
+  }
+}

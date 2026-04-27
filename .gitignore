@@ -1,0 +1,9 @@
+node_modules/
+.expo/
+.env
+.env.local
+apps/api/data/db.json
+apps/api/data/uploads/*
+!apps/api/data/uploads/.gitkeep
+npm-debug.log*
+*.log
