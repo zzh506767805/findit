@@ -43,7 +43,7 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'search_items',
-    description: '按物品名称搜索所有记录，返回物品名、位置路径、容器、记录时间和照片ID。',
+    description: '按关键词搜索物品，同时匹配名称和描述（颜色、品牌、材质等特征）。可多次调用，用不同关键词扩大搜索范围。',
     parameters: {
       type: 'object',
       properties: { query: { type: 'string', description: '搜索关键词' } },

@@ -87,16 +87,25 @@ Expo App → API (Container Apps) → PostgreSQL
 
 空间(Space) → 位置(Position) → 容器(container字段) → 物品(Item)
 
-## 部署流程
+## 发布流程
+
+每次改完代码后，按以下顺序操作：
 
 ```bash
-# 云端打镜像
+# 1. 推代码到 GitHub
+git add -A && git commit -m "描述改了什么" && git push
+
+# 2. 后端有改动时，重新部署
 cd apps/api
 az acr build --registry nbpacr --resource-group nbp-rg --image findit-api:latest --file Dockerfile .
-
-# 更新容器
 az containerapp update --name findit-api --resource-group nbp-rg --image nbpacr.azurecr.io/findit-api:latest
+
+# 3. 前端有改动时，重新打包（等 EAS Build 配好后）
+cd apps/mobile
+npx eas-cli build --profile preview --platform ios
 ```
+
+注意：目前没有自动部署，每次都需要手动执行。
 
 ## 上架计划
 

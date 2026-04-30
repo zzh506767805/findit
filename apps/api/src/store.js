@@ -200,7 +200,7 @@ export async function searchItems(userId, queryText) {
     JOIN items i ON ir.item_id = i.id
     JOIN positions p ON ir.position_id = p.id
     JOIN spaces s ON p.space_id = s.id
-    WHERE ir.user_id = $1 AND lower(i.name) LIKE $2
+    WHERE ir.user_id = $1 AND (lower(i.name) LIKE $2 OR lower(COALESCE(i.description,'')) LIKE $2)
     ORDER BY i.id, ir.recorded_at DESC
     LIMIT 10
   `, [userId, q]);
