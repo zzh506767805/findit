@@ -11,7 +11,8 @@
 - 数据库：PostgreSQL (Azure Flexible Server)
 - AI：Azure OpenAI Responses API (gpt-5.5) + 工具调用
 - 部署：Azure Container Apps (Japan East)
-- 图片上传：FormData multipart → Blob Storage（已改掉 base64）
+- 存储：Azure Blob Storage（@azure/storage-blob SDK，SAS URL 读取）
+- 上传：FormData multipart → Blob Storage（已改掉 base64）
 
 ## Azure 资源
 
@@ -82,9 +83,16 @@ Find/
 
 ```
 Expo App → API (Container Apps) → PostgreSQL
-         (FormData upload)      → Blob Storage (照片/视频帧)
-                                → Azure OpenAI (Responses API + tools)
+         (FormData upload)      → Blob Storage (照片/视频，SAS URL 访问)
+                                → Azure OpenAI (Responses API + tools，图片用 SAS URL 直传)
 ```
+
+### Blob Storage
+- 账户：finditstore，容器：data，公开访问已关闭
+- 上传用 @azure/storage-blob SDK，不手写签名
+- 数据库存裸 URL，API 返回时动态加 SAS（1小时有效）
+- AI 读图用 SAS URL（比 base64 省内存，但大图偶尔超时）
+- 环境变量：AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY, AZURE_STORAGE_CONTAINER
 
 ### Agent 工具
 
@@ -175,6 +183,8 @@ npx eas-cli build --profile preview --platform ios
 - 查询不计次，只有识别扣次数（AI 调用成本控制）
 - 日本区部署（Container Apps + PostgreSQL），阿里云做备案落地
 - 图片用 FormData multipart 上传到 Blob Storage，不用 base64
-- 视频用 ffmpeg 截帧后多帧发给 AI 识别
+- AI 读图用 Blob SAS URL 直传（不用 base64 内嵌），手写 SAS 签名不靠谱必须用 SDK
+- 视频用 ffmpeg 截帧（1FPS，最多10帧）后多帧 base64 发给 AI 识别
+- 视频限制 10 秒，前端 expo-image-picker videoMaxDuration=10
 - 物品 description 必须包含视觉特征（颜色/品牌/材质），提升模糊搜索召回
 - 防火墙开发阶段全开，上线前收紧
