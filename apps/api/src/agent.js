@@ -1,6 +1,12 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, rm, mkdir } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { toolDefinitions, executeTool } from './tools.js';
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_API_VERSION = '2025-04-01-preview';
 
@@ -70,14 +76,20 @@ async function callResponsesApi(input, tools, previousResponseId) {
   };
   if (previousResponseId) body.previous_response_id = previousResponseId;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'api-key': process.env.AZURE_OPENAI_API_KEY
-    },
-    body: JSON.stringify(body)
-  });
+  let response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'api-key': process.env.AZURE_OPENAI_API_KEY
+      },
+      body: JSON.stringify(body)
+    });
+  } catch (fetchErr) {
+    const cause = fetchErr.cause ? `: ${fetchErr.cause.message || fetchErr.cause}` : '';
+    throw new Error(`Azure fetch failed${cause}`);
+  }
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`Azure Responses API failed: ${response.status} ${detail}`);
@@ -112,27 +124,62 @@ function extractOutputs(payload) {
   return { toolCalls, text };
 }
 
+async function compressImageBase64(base64Str, maxDim = 1024, quality = 80) {
+  const dir = path.join(tmpdir(), `findit_compress_${randomUUID()}`);
+  await mkdir(dir, { recursive: true });
+  const inPath = path.join(dir, 'in.jpg');
+  const outPath = path.join(dir, 'out.jpg');
+  await writeFile(inPath, Buffer.from(base64Str, 'base64'));
+  try {
+    await execFileAsync('ffmpeg', [
+      '-i', inPath, '-vf', `scale='min(${maxDim},iw)':min'(${maxDim},ih)':force_original_aspect_ratio=decrease`,
+      '-q:v', String(Math.round((100 - quality) / 3.3)), '-y', outPath
+    ]);
+    const compressed = await readFile(outPath);
+    return compressed.toString('base64');
+  } catch {
+    return base64Str; // fallback to original if ffmpeg fails
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 function buildImageInput(imageBase64, mimeType) {
   const dataUrl = `data:${mimeType || 'image/jpeg'};base64,${imageBase64}`;
   return { type: 'input_image', image_url: dataUrl };
 }
 
-export async function runAgent({ mode, query, imageBase64, mimeType, userId, uploadDir, onEvent }) {
+function buildImageUrl(url) {
+  return { type: 'input_image', image_url: url };
+}
+
+export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames, mimeType, userId, uploadDir, onEvent }) {
   if (!hasAzureConfig()) {
     return runMockAgent({ mode, query, imageBase64, userId, onEvent });
   }
 
   const emit = onEvent || (() => {});
+  const isRealUrl = blobUrl?.startsWith('https://');
   let input = [
     { role: 'system', content: [{ type: 'input_text', text: SYSTEM_PROMPT }] }
   ];
 
-  if (mode === 'analyze' && imageBase64) {
+  if (mode === 'analyze' && videoFrames?.length) {
+    const content = [
+      { type: 'input_text', text: `这是一段视频的${videoFrames.length}个截帧，请综合所有帧识别物品和位置。` },
+      ...videoFrames.map(f => buildImageInput(f, 'image/jpeg'))
+    ];
+    input.push({ role: 'user', content });
+  } else if (mode === 'analyze' && (isRealUrl || imageBase64)) {
+    // Prefer Blob URL (faster, no base64 overhead), fallback to compressed base64
+    const imageContent = isRealUrl
+      ? buildImageUrl(blobUrl)
+      : buildImageInput(await compressImageBase64(imageBase64), 'image/jpeg');
     input.push({
       role: 'user',
       content: [
         { type: 'input_text', text: '请识别这张照片中的物品和位置。' },
-        buildImageInput(imageBase64, mimeType)
+        imageContent
       ]
     });
   } else {
@@ -168,10 +215,25 @@ export async function runAgent({ mode, query, imageBase64, mimeType, userId, upl
         const viewResult = await executeTool(call.name, call.arguments, userId, uploadDir);
         if (viewResult.blob_url) {
           try {
+            if (viewResult.blob_url.startsWith('https://')) {
+              // Blob URL — pass directly to AI
+              result = { viewed: true, photo_description: `照片 ${viewResult.media_asset_id}` };
+              toolOutputs.push({
+                type: 'function_call_output',
+                call_id: call.id,
+                output: JSON.stringify({ viewed: true })
+              });
+              input = [...(Array.isArray(input) ? input : []), {
+                role: 'user',
+                content: [buildImageUrl(viewResult.blob_url)]
+              }];
+              emit({ type: 'tool_result', tool: call.name, result: { viewed: true, blob_url: viewResult.blob_url } });
+              continue;
+            }
+            // Local file fallback — compress and use base64
             const filePath = path.join(uploadDir, path.basename(viewResult.blob_url));
             const fileData = await readFile(filePath);
-            const base64 = fileData.toString('base64');
-            const mime = viewResult.blob_url.endsWith('.png') ? 'image/png' : 'image/jpeg';
+            const base64 = await compressImageBase64(fileData.toString('base64'));
             result = { viewed: true, photo_description: `照片 ${viewResult.media_asset_id}` };
             emit({ type: 'tool_result', tool: call.name, result: { viewed: true, blob_url: viewResult.blob_url } });
           } catch {

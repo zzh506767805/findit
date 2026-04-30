@@ -15,7 +15,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 
 import { requestJson } from '../api';
-import { streamAgent } from '../sse';
+import { streamAgent, streamAgentUpload } from '../sse';
 import { AppIcon } from '../ui';
 import { colors, radius, shadows } from '../theme';
 import AgentWorkflow from '../components/AgentWorkflow';
@@ -77,32 +77,42 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
     scrollEnd();
   }
 
-  async function pickImage(source) {
+  async function pickMedia(source, mediaType) {
     const perm = source === 'camera'
       ? await ImagePicker.requestCameraPermissionsAsync()
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert('需要权限'); return; }
 
+    const options = mediaType === 'video'
+      ? { mediaTypes: ['videos'], videoMaxDuration: 10, quality: 0.7 }
+      : mediaType === 'image'
+        ? { mediaTypes: ['images'], quality: 0.72 }
+        : { mediaTypes: ['images', 'videos'], videoMaxDuration: 10, quality: 0.72 };
+
     const result = source === 'camera'
-      ? await ImagePicker.launchCameraAsync({ base64: true, quality: 0.72 })
-      : await ImagePicker.launchImageLibraryAsync({ base64: true, quality: 0.72 });
+      ? await ImagePicker.launchCameraAsync(options)
+      : await ImagePicker.launchImageLibraryAsync(options);
     if (result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
-    addMsg({ role: 'user', type: 'photo', uri: asset.uri });
+    const isVideo = asset.type === 'video' || asset.uri?.match(/\.(mp4|mov|m4v)$/i);
+    const msgType = isVideo ? 'video' : 'photo';
+    const mime = isVideo ? 'video/mp4' : (asset.mimeType || 'image/jpeg');
+
+    addMsg({ role: 'user', type: msgType, uri: asset.uri });
     addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, mediaAssetId: null });
     setBusy(true);
 
+    const handleEvent = (e) => {
+      if (e.type === 'media') patchLastAgent((m) => ({ ...m, mediaAssetId: e.media_asset_id }));
+      else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
+        patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
+      else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
+      else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
+    };
+
     try {
-      await streamAgent(session.apiUrl, session.token, '/agent/analyze', {
-        imageBase64: asset.base64, mimeType: asset.mimeType || 'image/jpeg'
-      }, (e) => {
-        if (e.type === 'media') patchLastAgent((m) => ({ ...m, mediaAssetId: e.media_asset_id }));
-        else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
-          patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
-        else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
-        else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
-      });
+      await streamAgentUpload(session.apiUrl, session.token, '/agent/analyze', asset.uri, mime, handleEvent);
       onCreditsChanged?.();
     } catch (err) {
       if (err.message?.includes('已用完')) {
@@ -171,10 +181,18 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
         ) : null}
 
         {messages.map((msg, i) => {
-          if (msg.role === 'user' && msg.type === 'photo') {
+          if (msg.role === 'user' && (msg.type === 'photo' || msg.type === 'video')) {
             return (
               <View key={i} style={s.userRow}>
-                <Image source={{ uri: msg.uri }} style={s.userPhoto} />
+                <View>
+                  <Image source={{ uri: msg.uri }} style={s.userPhoto} />
+                  {msg.type === 'video' ? (
+                    <View style={s.videoBadge}>
+                      <AppIcon name="play-circle" size={14} color={colors.white} />
+                      <Text style={s.videoBadgeText}>视频</Text>
+                    </View>
+                  ) : null}
+                </View>
               </View>
             );
           }
@@ -214,9 +232,10 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
 
         <View style={s.dock}>
           <Pressable style={({ pressed }) => [s.camBtn, pressed && s.pressed]}
-            onPress={() => Alert.alert('拍照方式', '', [
-              { text: '相机', onPress: () => pickImage('camera') },
-              { text: '相册', onPress: () => pickImage('library') },
+            onPress={() => Alert.alert('记录方式', '', [
+              { text: '拍照', onPress: () => pickMedia('camera', 'image') },
+              { text: '录像', onPress: () => pickMedia('camera', 'video') },
+              { text: '从相册选', onPress: () => pickMedia('library') },
               { text: '取消', style: 'cancel' }
             ])} disabled={busy}>
             <AppIcon name="camera" size={20} color={colors.white} />
@@ -247,6 +266,11 @@ const s = StyleSheet.create({
   hintText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
   userRow: { alignItems: 'flex-end' },
   userPhoto: { width: 200, height: 150, borderRadius: radius.lg, backgroundColor: colors.bgCard },
+  videoBadge: {
+    position: 'absolute', bottom: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
+    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 3
+  },
+  videoBadgeText: { color: colors.white, fontSize: 11, fontWeight: '700' },
   userBubble: { maxWidth: '78%', backgroundColor: colors.bgInput, borderRadius: radius.lg, borderBottomRightRadius: radius.xs, paddingHorizontal: 16, paddingVertical: 10 },
   userText: { color: colors.text, fontSize: 15, fontWeight: '600', lineHeight: 21 },
   agentRow: { gap: 8 },

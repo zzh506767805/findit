@@ -1,7 +1,13 @@
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { createHmac } from 'node:crypto';
+import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BlobServiceClient, StorageSharedKeyCredential, generateBlobSASQueryParameters, BlobSASPermissions } from '@azure/storage-blob';
+
+const execFileAsync = promisify(execFile);
 import { runAgent, getAzureConfigStatus } from './agent.js';
 import {
   getOrCreateDemoUser, getOrCreateAppleUser, requireUser, newId, nowIso,
@@ -42,9 +48,22 @@ function corsHeaders() {
   };
 }
 
+function addSasToUrls(data) {
+  if (!process.env.AZURE_STORAGE_KEY) return data;
+  const json = JSON.stringify(data);
+  const blobBase = `https://${process.env.AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/`;
+  if (!json.includes(blobBase)) return data;
+  // Replace all bare blob URLs with SAS-signed URLs
+  const replaced = json.replace(
+    new RegExp(`${blobBase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^"?]+`, 'g'),
+    (url) => getBlobSasUrl(url)
+  );
+  return JSON.parse(replaced);
+}
+
 function sendJson(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...corsHeaders() });
-  res.end(JSON.stringify(data));
+  res.end(JSON.stringify(addSasToUrls(data)));
 }
 
 function sendFile(res, status, body, contentType) {
@@ -69,15 +88,160 @@ function getUserId(req) {
   return null;
 }
 
+// ─── Azure Blob Storage ───
+
+let _blobCredential;
+let _blobServiceClient;
+
+function getBlobServiceClient() {
+  const account = process.env.AZURE_STORAGE_ACCOUNT;
+  const key = process.env.AZURE_STORAGE_KEY;
+  if (!account || !key) return null;
+  if (!_blobServiceClient) {
+    _blobCredential = new StorageSharedKeyCredential(account, key);
+    _blobServiceClient = new BlobServiceClient(`https://${account}.blob.core.windows.net`, _blobCredential);
+  }
+  return _blobServiceClient;
+}
+
+function getBlobUrl(blobName) {
+  const account = process.env.AZURE_STORAGE_ACCOUNT;
+  const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
+  return `https://${account}.blob.core.windows.net/${container}/${blobName}`;
+}
+
+function getBlobSasUrl(blobUrl) {
+  if (!_blobCredential || !blobUrl.startsWith('https://')) return blobUrl;
+  const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
+  const blobName = blobUrl.split('/').pop().split('?')[0];
+  const expiry = new Date();
+  expiry.setHours(expiry.getHours() + 1);
+
+  const sasQuery = generateBlobSASQueryParameters({
+    containerName: container,
+    blobName,
+    permissions: BlobSASPermissions.parse('r'),
+    expiresOn: expiry
+  }, _blobCredential).toString();
+
+  return `${blobUrl.split('?')[0]}?${sasQuery}`;
+}
+
+async function uploadToBlob(buffer, blobName, contentType) {
+  const client = getBlobServiceClient();
+  const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
+  const blockBlob = client.getContainerClient(container).getBlockBlobClient(blobName);
+  await blockBlob.upload(buffer, buffer.length, {
+    blobHTTPHeaders: { blobContentType: contentType }
+  });
+  return getBlobUrl(blobName);
+}
+
 async function saveBase64Image({ imageBase64, mimeType }) {
-  const { mkdir, writeFile } = await import('node:fs/promises');
-  await mkdir(UPLOAD_DIR, { recursive: true });
   const mediaId = newId();
   const extension = mimeType?.includes('png') ? 'png' : 'jpg';
-  const fileName = `${mediaId}.${extension}`;
-  const filePath = path.join(UPLOAD_DIR, fileName);
-  await writeFile(filePath, Buffer.from(imageBase64, 'base64'));
-  return { mediaId, fileName, blobUrl: `/uploads/${fileName}` };
+  const blobName = `${mediaId}.${extension}`;
+  const buffer = Buffer.from(imageBase64, 'base64');
+
+  if (process.env.AZURE_STORAGE_ACCOUNT) {
+    await uploadToBlob(buffer, blobName, mimeType || 'image/jpeg');
+    return { mediaId, blobUrl: getBlobUrl(blobName) }; // permanent URL for DB
+  }
+  await mkdir(UPLOAD_DIR, { recursive: true });
+  await writeFile(path.join(UPLOAD_DIR, blobName), buffer);
+  return { mediaId, blobUrl: `/uploads/${blobName}` };
+}
+
+// ─── Multipart parser (minimal, no deps) ───
+
+async function parseMultipart(req) {
+  const contentType = req.headers['content-type'] || '';
+  const boundaryMatch = contentType.match(/boundary=(.+)/);
+  if (!boundaryMatch) throw Object.assign(new Error('No multipart boundary'), { status: 400 });
+  const boundary = boundaryMatch[1];
+
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  const body = Buffer.concat(chunks);
+
+  const parts = {};
+  const delimiter = Buffer.from(`--${boundary}`);
+  let start = body.indexOf(delimiter) + delimiter.length;
+
+  while (start < body.length) {
+    const nextDelim = body.indexOf(delimiter, start);
+    if (nextDelim === -1) break;
+    const part = body.slice(start, nextDelim);
+    start = nextDelim + delimiter.length;
+
+    const headerEnd = part.indexOf('\r\n\r\n');
+    if (headerEnd === -1) continue;
+    const headerStr = part.slice(0, headerEnd).toString('utf8');
+    const content = part.slice(headerEnd + 4, part.length - 2); // trim trailing \r\n
+
+    const nameMatch = headerStr.match(/name="([^"]+)"/);
+    if (!nameMatch) continue;
+    const name = nameMatch[1];
+    const fileNameMatch = headerStr.match(/filename="([^"]+)"/);
+    const ctMatch = headerStr.match(/Content-Type:\s*(.+)/i);
+
+    if (fileNameMatch) {
+      parts[name] = { buffer: content, fileName: fileNameMatch[1], contentType: ctMatch?.[1]?.trim() };
+    } else {
+      parts[name] = content.toString('utf8');
+    }
+  }
+  return parts;
+}
+
+// ─── Video frame extraction ───
+
+async function extractVideoFrames(videoBuffer, maxFrames = 10) {
+  const { tmpdir } = await import('node:os');
+  const tempDir = path.join(tmpdir(), `findit_frames_${newId()}`);
+  await mkdir(tempDir, { recursive: true });
+  const videoPath = path.join(tempDir, 'input.mp4');
+  await writeFile(videoPath, videoBuffer);
+
+  // Get video duration
+  const { stdout } = await execFileAsync('ffprobe', [
+    '-v', 'error', '-show_entries', 'format=duration',
+    '-of', 'default=noprint_wrappers=1:nokey=1', videoPath
+  ]);
+  const duration = Math.min(parseFloat(stdout) || 10, 10);
+  const fps = Math.min(maxFrames, Math.ceil(duration)) / duration;
+
+  await execFileAsync('ffmpeg', [
+    '-i', videoPath, '-vf', `fps=${fps}`, '-frames:v', String(maxFrames),
+    '-q:v', '2', path.join(tempDir, 'frame_%03d.jpg')
+  ]);
+
+  const { readdir } = await import('node:fs/promises');
+  const files = (await readdir(tempDir)).filter(f => f.endsWith('.jpg')).sort();
+  const frames = [];
+  for (const f of files) {
+    const data = await readFile(path.join(tempDir, f));
+    frames.push(data.toString('base64'));
+  }
+
+  await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  return frames;
+}
+
+async function saveUploadedFile(fileData) {
+  const mediaId = newId();
+  const ct = fileData.contentType || '';
+  const isVideo = ct.startsWith('video/');
+  const ext = isVideo ? 'mp4' : (ct.includes('png') ? 'png' : 'jpg');
+  const blobName = `${mediaId}.${ext}`;
+
+  if (process.env.AZURE_STORAGE_ACCOUNT) {
+    await uploadToBlob(fileData.buffer, blobName, ct || 'application/octet-stream');
+    return { mediaId, blobUrl: getBlobUrl(blobName), contentType: ct, isVideo, buffer: fileData.buffer };
+  }
+  await mkdir(UPLOAD_DIR, { recursive: true });
+  await writeFile(path.join(UPLOAD_DIR, blobName), fileData.buffer);
+  return { mediaId, blobUrl: `/uploads/${blobName}`, contentType: ct, isVideo, buffer: fileData.buffer };
 }
 
 async function route(req, res) {
@@ -95,7 +259,9 @@ async function route(req, res) {
     const filePath = path.join(UPLOAD_DIR, fileName);
     try {
       const file = await readFile(filePath);
-      const contentType = fileName.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      const contentType = fileName.endsWith('.png') ? 'image/png'
+        : fileName.endsWith('.mp4') ? 'video/mp4'
+        : 'image/jpeg';
       return sendFile(res, 200, file, contentType);
     } catch {
       return sendJson(res, 404, { error: 'File not found' });
@@ -158,13 +324,36 @@ async function route(req, res) {
   // ─── Agent (SSE) ───
 
   if (method === 'POST' && url.pathname === '/agent/analyze') {
-    const body = await readJson(req);
-    if (!body.imageBase64) return sendJson(res, 400, { error: 'imageBase64 is required' });
+    const ct = req.headers['content-type'] || '';
+    let imageBase64, mimeType, videoFrames, saved;
+
+    if (ct.includes('multipart/form-data')) {
+      // New: FormData file upload (image or video)
+      const parts = await parseMultipart(req);
+      const file = parts.file;
+      if (!file?.buffer) return sendJson(res, 400, { error: 'file is required' });
+
+      saved = await saveUploadedFile(file);
+
+      if (saved.isVideo) {
+        videoFrames = await extractVideoFrames(saved.buffer);
+        if (!videoFrames.length) return sendJson(res, 400, { error: 'Failed to extract frames from video' });
+        mimeType = 'image/jpeg';
+      } else {
+        imageBase64 = file.buffer.toString('base64');
+        mimeType = saved.contentType || 'image/jpeg';
+      }
+    } else {
+      // Legacy: JSON base64 upload
+      const body = await readJson(req);
+      if (!body.imageBase64) return sendJson(res, 400, { error: 'imageBase64 is required' });
+      imageBase64 = body.imageBase64;
+      mimeType = body.mimeType || 'image/jpeg';
+      saved = await saveBase64Image({ imageBase64, mimeType });
+    }
 
     await consumeCredit(user.id);
-
-    const saved = await saveBase64Image({ imageBase64: body.imageBase64, mimeType: body.mimeType });
-    await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, body.mimeType || 'image/jpeg');
+    await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, mimeType);
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -173,12 +362,15 @@ async function route(req, res) {
       ...corsHeaders()
     });
 
-    sendSse(res, 'media', { media_asset_id: saved.mediaId, blob_url: saved.blobUrl });
+    const sasUrl = saved.blobUrl.startsWith('https://') ? getBlobSasUrl(saved.blobUrl) : saved.blobUrl;
+    sendSse(res, 'media', { media_asset_id: saved.mediaId, blob_url: sasUrl });
 
     await runAgent({
       mode: 'analyze',
-      imageBase64: body.imageBase64,
-      mimeType: body.mimeType,
+      imageBase64,
+      blobUrl: sasUrl,
+      videoFrames,
+      mimeType,
       userId: user.id,
       uploadDir: UPLOAD_DIR,
       onEvent: (event) => sendSse(res, event.type, event)

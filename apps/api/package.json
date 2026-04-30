@@ -8,6 +8,7 @@
     "check": "node --check src/server.js && node --check src/store.js && node --check src/ai.js"
   },
   "dependencies": {
+    "@azure/storage-blob": "^12.31.0",
     "pg": "^8.20.0"
   }
 }
