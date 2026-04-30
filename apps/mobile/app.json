@@ -30,6 +30,9 @@
         "projectId": "fce39d55-e1da-4488-9dee-204eeb7a48c3"
       }
     },
-    "owner": "zetacoler"
+    "owner": "zetacoler",
+    "plugins": [
+      "expo-secure-store"
+    ]
   }
 }

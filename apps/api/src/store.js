@@ -39,14 +39,48 @@ export async function getOrCreateDemoUser(email = 'demo@findit.local') {
   return rows[0];
 }
 
+export async function getOrCreateAppleUser(appleUserId, email, name) {
+  const existing = await query('SELECT * FROM users WHERE apple_user_id = $1', [appleUserId]);
+  if (existing.length) return existing[0];
+
+  const id = newId();
+  const rows = await query(
+    'INSERT INTO users (id, apple_user_id, email, name) VALUES ($1, $2, $3, $4) RETURNING *',
+    [id, appleUserId, email, name || 'User']
+  );
+  return rows[0];
+}
+
 export async function requireUser(userId) {
   if (!userId) throw Object.assign(new Error('User not found'), { status: 401 });
   const rows = await query('SELECT * FROM users WHERE id = $1', [userId]);
   if (rows.length) return rows[0];
-  // fallback to first user
-  const fallback = await query('SELECT * FROM users LIMIT 1');
-  if (fallback.length) return fallback[0];
   throw Object.assign(new Error('User not found'), { status: 401 });
+}
+
+// ─── Credits ───
+
+export async function getUserCredits(userId) {
+  const rows = await query('SELECT free_credits, paid_credits FROM users WHERE id = $1', [userId]);
+  if (!rows.length) return { free: 0, paid: 0, total: 0 };
+  const { free_credits, paid_credits } = rows[0];
+  return { free: free_credits, paid: paid_credits, total: free_credits + paid_credits };
+}
+
+export async function consumeCredit(userId) {
+  const credits = await getUserCredits(userId);
+  if (credits.total <= 0) {
+    throw Object.assign(new Error('识别次数已用完，请购买年卡继续使用'), { status: 403 });
+  }
+  if (credits.free > 0) {
+    await query('UPDATE users SET free_credits = free_credits - 1 WHERE id = $1', [userId]);
+  } else {
+    await query('UPDATE users SET paid_credits = paid_credits - 1 WHERE id = $1', [userId]);
+  }
+}
+
+export async function addCredits(userId, amount) {
+  await query('UPDATE users SET paid_credits = paid_credits + $1 WHERE id = $2', [amount, userId]);
 }
 
 // ─── Spaces ───

@@ -4,11 +4,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runAgent, getAzureConfigStatus } from './agent.js';
 import {
-  getOrCreateDemoUser, requireUser, newId, nowIso,
+  getOrCreateDemoUser, getOrCreateAppleUser, requireUser, newId, nowIso,
   listSpaces, listPositions, getPositionDetail,
   findOrCreateSpace, findOrCreatePosition,
   createMediaAsset, updateMediaAssetPosition,
-  findOrCreateItem, createItemRecord
+  findOrCreateItem, createItemRecord,
+  getUserCredits, consumeCredit, addCredits
 } from './store.js';
 
 const PORT = Number(process.env.PORT || 4000);
@@ -104,10 +105,34 @@ async function route(req, res) {
   if (method === 'POST' && url.pathname === '/auth/login') {
     const body = await readJson(req);
     const user = await getOrCreateDemoUser(body.email || 'demo@findit.local');
-    return sendJson(res, 200, { user, token: user.id });
+    const credits = await getUserCredits(user.id);
+    return sendJson(res, 200, { user, token: user.id, credits });
+  }
+
+  if (method === 'POST' && url.pathname === '/auth/apple') {
+    const body = await readJson(req);
+    const { appleUserId, email, fullName, identityToken } = body;
+    if (!appleUserId) return sendJson(res, 400, { error: 'appleUserId is required' });
+    // TODO: 正式上线前验证 identityToken 签名
+    const name = fullName || (email ? email.split('@')[0] : 'User');
+    const user = await getOrCreateAppleUser(appleUserId, email, name);
+    const credits = await getUserCredits(user.id);
+    return sendJson(res, 200, { user, token: user.id, credits });
   }
 
   const user = await requireUser(getUserId(req));
+
+  if (method === 'GET' && url.pathname === '/user/credits') {
+    const credits = await getUserCredits(user.id);
+    return sendJson(res, 200, credits);
+  }
+
+  if (method === 'POST' && url.pathname === '/user/add-credits') {
+    const body = await readJson(req);
+    await addCredits(user.id, body.amount || 0);
+    const credits = await getUserCredits(user.id);
+    return sendJson(res, 200, credits);
+  }
 
   // ─── Spaces ───
 
@@ -135,6 +160,8 @@ async function route(req, res) {
   if (method === 'POST' && url.pathname === '/agent/analyze') {
     const body = await readJson(req);
     if (!body.imageBase64) return sendJson(res, 400, { error: 'imageBase64 is required' });
+
+    await consumeCredit(user.id);
 
     const saved = await saveBase64Image({ imageBase64: body.imageBase64, mimeType: body.mimeType });
     await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, body.mimeType || 'image/jpeg');

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Alert,
   Animated,
   Easing,
   KeyboardAvoidingView,
@@ -17,6 +18,8 @@ import { getDefaultApiUrl, requestJson } from './src/api';
 import { colors, radius } from './src/theme';
 import AssistantScreen from './src/screens/AssistantScreen';
 import SpacesScreen from './src/screens/SpacesScreen';
+import LoginScreen from './src/screens/LoginScreen';
+import PaywallScreen from './src/screens/PaywallScreen';
 
 const AnimatedFeather = Animated.createAnimatedComponent(Feather);
 const AnimatedText = Animated.createAnimatedComponent(Text);
@@ -38,6 +41,8 @@ export default function App() {
   const [apiUrl, setApiUrl] = useState(getDefaultApiUrl());
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
+  const [credits, setCredits] = useState(null);
+  const [showPaywall, setShowPaywall] = useState(false);
   const [tab, setTab] = useState('assistant');
   const [error, setError] = useState('');
   const progress = useRef(new Animated.Value(0)).current;
@@ -86,16 +91,26 @@ export default function App() {
 
   const session = useMemo(() => ({ apiUrl, token }), [apiUrl, token]);
 
-  const login = useCallback(async () => {
-    setError('');
-    const data = await requestJson('/auth/login', {
-      apiUrl, method: 'POST', body: { email: 'demo@findit.local' }
-    });
+  function handleLogin(data) {
     setToken(data.token);
     setUser(data.user);
-  }, [apiUrl]);
+    setCredits(data.credits);
+  }
 
-  useEffect(() => { login().catch((err) => setError(err.message)); }, [login]);
+  async function refreshCredits() {
+    if (!token) return;
+    try {
+      const c = await requestJson('/user/credits', { apiUrl, token });
+      setCredits(c);
+    } catch {}
+  }
+
+  async function handlePurchase(amount) {
+    // 开发阶段：直接给后端加次数
+    await requestJson('/user/add-credits', { apiUrl, token, method: 'POST', body: { amount } });
+    await refreshCredits();
+    setShowPaywall(false);
+  }
 
   function switchTab(next) {
     if (next === tab) return;
@@ -108,6 +123,29 @@ export default function App() {
       easing: Easing.out(Easing.cubic),
       useNativeDriver: false
     }).start();
+  }
+
+  if (!token) {
+    return (
+      <SafeAreaView style={s.safe}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
+        <LoginScreen apiUrl={apiUrl} onLogin={handleLogin} />
+      </SafeAreaView>
+    );
+  }
+
+  if (showPaywall) {
+    return (
+      <SafeAreaView style={s.safe}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
+        <PaywallScreen
+          credits={credits}
+          onPurchase={handlePurchase}
+          onRestore={() => Alert.alert('恢复购买', '开发中')}
+          onClose={() => setShowPaywall(false)}
+        />
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -168,7 +206,7 @@ export default function App() {
               }
             ]}
           >
-            <AssistantScreen session={session} />
+            <AssistantScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} />
           </Animated.View>
           <Animated.View
             pointerEvents={tab === 'spaces' ? 'auto' : 'none'}
@@ -181,7 +219,7 @@ export default function App() {
               }
             ]}
           >
-            <SpacesScreen session={session} />
+            <SpacesScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} />
           </Animated.View>
         </View>
       </KeyboardAvoidingView>

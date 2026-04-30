@@ -51,7 +51,7 @@ function TypingDots() {
   );
 }
 
-export default function AssistantScreen({ session, onDataChanged }) {
+export default function AssistantScreen({ session, onDataChanged, credits, onNeedCredits, onCreditsChanged }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -103,8 +103,14 @@ export default function AssistantScreen({ session, onDataChanged }) {
         else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
         else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
       });
+      onCreditsChanged?.();
     } catch (err) {
-      patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
+      if (err.message?.includes('已用完')) {
+        onNeedCredits?.();
+        setMessages((p) => p.slice(0, -1));
+      } else {
+        patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
+      }
     } finally { setBusy(false); }
   }
 
