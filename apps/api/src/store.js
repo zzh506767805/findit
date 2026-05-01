@@ -341,8 +341,9 @@ export async function initConversationTables() {
     confirmed BOOLEAN DEFAULT FALSE, source VARCHAR(20) DEFAULT 'assistant',
     created_at TIMESTAMPTZ DEFAULT NOW()
   )`);
-  // Add source column if table already exists
+  // Add columns if table already exists
   await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'assistant'`).catch(() => {});
+  await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS steps JSONB`).catch(() => {});
 }
 
 export async function getOrCreateConversation(userId) {
@@ -376,13 +377,14 @@ export async function getConversationMessages(conversationId, { limit = 50, sour
   `, [conversationId, limit]);
 }
 
-export async function createMessage(conversationId, userId, { role, type, content, blobUrl, suggestion, mediaAssetId, confirmed, source }) {
+export async function createMessage(conversationId, userId, { role, type, content, blobUrl, suggestion, mediaAssetId, confirmed, source, steps }) {
   const id = newId();
   const rows = await query(
-    `INSERT INTO messages (id, conversation_id, user_id, role, type, content, blob_url, suggestion, media_asset_id, confirmed, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+    `INSERT INTO messages (id, conversation_id, user_id, role, type, content, blob_url, suggestion, media_asset_id, confirmed, source, steps)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *`,
     [id, conversationId, userId, role, type, content || null, blobUrl || null,
-     suggestion ? JSON.stringify(suggestion) : null, mediaAssetId || null, confirmed || false, source || 'assistant']
+     suggestion ? JSON.stringify(suggestion) : null, mediaAssetId || null, confirmed || false, source || 'assistant',
+     steps ? JSON.stringify(steps) : null]
   );
   return rows[0];
 }

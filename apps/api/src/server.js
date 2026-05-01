@@ -390,6 +390,7 @@ async function route(req, res) {
 
     let agentAnswer = '';
     let agentSuggestion = null;
+    const agentSteps = [];
     log(`starting AI agent (source=${source})`);
 
     try {
@@ -404,6 +405,7 @@ async function route(req, res) {
         previousResponseId: conv.last_response_id,
         onEvent: (event) => {
           sendSse(res, event.type, event);
+          if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
           if (event.type === 'answer') agentAnswer = event.text || '';
           if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
         }
@@ -412,7 +414,7 @@ async function route(req, res) {
       log('AI agent done');
       const agentMsg = await createMessage(conv.id, user.id, {
         role: 'agent', type: 'answer', content: agentAnswer,
-        suggestion: agentSuggestion, mediaAssetId: saved.mediaId, source
+        suggestion: agentSuggestion, mediaAssetId: saved.mediaId, source, steps: agentSteps
       });
       if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
       sendSse(res, 'message_saved', { message_id: agentMsg.id });
@@ -443,6 +445,7 @@ async function route(req, res) {
 
     let agentAnswer = '';
     let agentSuggestion = null;
+    const agentSteps = [];
 
     const result = await runAgent({
       mode: 'query',
@@ -452,6 +455,7 @@ async function route(req, res) {
       previousResponseId: conv.last_response_id,
       onEvent: (event) => {
         sendSse(res, event.type, event);
+        if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
         if (event.type === 'answer') agentAnswer = event.text || '';
         if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
       }
@@ -459,7 +463,7 @@ async function route(req, res) {
 
     const agentMsg = await createMessage(conv.id, user.id, {
       role: 'agent', type: 'answer', content: agentAnswer,
-      suggestion: agentSuggestion
+      suggestion: agentSuggestion, steps: agentSteps
     });
     if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
     sendSse(res, 'message_saved', { message_id: agentMsg.id });

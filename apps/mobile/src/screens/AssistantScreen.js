@@ -58,7 +58,7 @@ function serverMsgToLocal(m) {
     return { role: 'user', type: m.type, uri: m.blob_url };
   }
   return {
-    role: 'agent', steps: [], answer: m.content,
+    role: 'agent', steps: m.steps || [], answer: m.content,
     suggestion: m.suggestion, mediaAssetId: m.media_asset_id,
     messageId: m.id, confirmed: m.confirmed
   };
