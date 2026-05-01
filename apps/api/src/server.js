@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -12,10 +12,9 @@ import { runAgent, getAzureConfigStatus } from './agent.js';
 import {
   getOrCreateDemoUser, getOrCreateAppleUser, requireUser, newId, nowIso,
   listSpaces, listPositions, getPositionDetail,
-  findOrCreateSpace, findOrCreatePosition,
-  createMediaAsset, updateMediaAssetPosition,
-  findOrCreateItem, createItemRecord,
-  getUserCredits, consumeCredit, addCredits
+  createMediaAsset,
+  getUserCredits, consumeCredit, refundCredit, addCredits,
+  confirmAndSave
 } from './store.js';
 
 const PORT = Number(process.env.PORT || 4000);
@@ -46,6 +45,33 @@ function corsHeaders() {
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
   };
+}
+
+// ─── Auth Token (HMAC-SHA256) ───
+
+const JWT_SECRET = process.env.JWT_SECRET || 'findit-dev-secret-change-in-production';
+
+function signToken(userId) {
+  const payload = Buffer.from(JSON.stringify({ sub: userId, iat: Date.now() })).toString('base64url');
+  const sig = createHmac('sha256', JWT_SECRET).update(payload).digest('base64url');
+  return `${payload}.${sig}`;
+}
+
+const TOKEN_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function verifyToken(token) {
+  const parts = (token || '').split('.');
+  if (parts.length !== 2) return null;
+  const [payload, sig] = parts;
+  const expected = createHmac('sha256', JWT_SECRET).update(payload).digest('base64url');
+  const sigBuf = Buffer.from(sig);
+  const expectedBuf = Buffer.from(expected);
+  if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) return null;
+  try {
+    const data = JSON.parse(Buffer.from(payload, 'base64url').toString());
+    if (Date.now() - data.iat > TOKEN_MAX_AGE_MS) return null;
+    return data.sub;
+  } catch { return null; }
 }
 
 function addSasToUrls(data) {
@@ -84,7 +110,7 @@ async function readJson(req) {
 
 function getUserId(req) {
   const auth = req.headers.authorization || '';
-  if (auth.startsWith('Bearer ')) return auth.slice('Bearer '.length);
+  if (auth.startsWith('Bearer ')) return verifyToken(auth.slice(7));
   return null;
 }
 
@@ -111,7 +137,9 @@ function getBlobUrl(blobName) {
 }
 
 function getBlobSasUrl(blobUrl) {
-  if (!_blobCredential || !blobUrl.startsWith('https://')) return blobUrl;
+  if (!blobUrl.startsWith('https://')) return blobUrl;
+  if (!_blobCredential) getBlobServiceClient();
+  if (!_blobCredential) return blobUrl;
   const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
   const blobName = blobUrl.split('/').pop().split('?')[0];
   const expiry = new Date();
@@ -154,14 +182,22 @@ async function saveBase64Image({ imageBase64, mimeType }) {
 
 // ─── Multipart parser (minimal, no deps) ───
 
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50MB
+const ALLOWED_MIME_RE = /^(image\/(jpeg|png|gif|webp|heic|heif)|video\/(mp4|quicktime|x-m4v))$/i;
+
 async function parseMultipart(req) {
   const contentType = req.headers['content-type'] || '';
-  const boundaryMatch = contentType.match(/boundary=(.+)/);
+  const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
   if (!boundaryMatch) throw Object.assign(new Error('No multipart boundary'), { status: 400 });
   const boundary = boundaryMatch[1];
 
   const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
+  let totalSize = 0;
+  for await (const chunk of req) {
+    totalSize += chunk.length;
+    if (totalSize > MAX_UPLOAD_BYTES) throw Object.assign(new Error('File too large (max 50MB)'), { status: 413 });
+    chunks.push(chunk);
+  }
   const body = Buffer.concat(chunks);
 
   const parts = {};
@@ -272,7 +308,7 @@ async function route(req, res) {
     const body = await readJson(req);
     const user = await getOrCreateDemoUser(body.email || 'demo@findit.local');
     const credits = await getUserCredits(user.id);
-    return sendJson(res, 200, { user, token: user.id, credits });
+    return sendJson(res, 200, { user, token: signToken(user.id), credits });
   }
 
   if (method === 'POST' && url.pathname === '/auth/apple') {
@@ -283,7 +319,7 @@ async function route(req, res) {
     const name = fullName || (email ? email.split('@')[0] : 'User');
     const user = await getOrCreateAppleUser(appleUserId, email, name);
     const credits = await getUserCredits(user.id);
-    return sendJson(res, 200, { user, token: user.id, credits });
+    return sendJson(res, 200, { user, token: signToken(user.id), credits });
   }
 
   const user = await requireUser(getUserId(req));
@@ -294,6 +330,9 @@ async function route(req, res) {
   }
 
   if (method === 'POST' && url.pathname === '/user/add-credits') {
+    if (process.env.NODE_ENV === 'production') {
+      return sendJson(res, 403, { error: 'IAP receipt validation required' });
+    }
     const body = await readJson(req);
     await addCredits(user.id, body.amount || 0);
     const credits = await getUserCredits(user.id);
@@ -332,6 +371,9 @@ async function route(req, res) {
       const parts = await parseMultipart(req);
       const file = parts.file;
       if (!file?.buffer) return sendJson(res, 400, { error: 'file is required' });
+      if (file.contentType && !ALLOWED_MIME_RE.test(file.contentType)) {
+        return sendJson(res, 400, { error: 'Unsupported file type' });
+      }
 
       saved = await saveUploadedFile(file);
 
@@ -352,8 +394,8 @@ async function route(req, res) {
       saved = await saveBase64Image({ imageBase64, mimeType });
     }
 
-    await consumeCredit(user.id);
-    await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, mimeType);
+    const creditType = await consumeCredit(user.id);
+    await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, saved.contentType || mimeType);
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -365,16 +407,23 @@ async function route(req, res) {
     const sasUrl = saved.blobUrl.startsWith('https://') ? getBlobSasUrl(saved.blobUrl) : saved.blobUrl;
     sendSse(res, 'media', { media_asset_id: saved.mediaId, blob_url: sasUrl });
 
-    await runAgent({
-      mode: 'analyze',
-      imageBase64,
-      blobUrl: sasUrl,
-      videoFrames,
-      mimeType,
-      userId: user.id,
-      uploadDir: UPLOAD_DIR,
-      onEvent: (event) => sendSse(res, event.type, event)
-    });
+    try {
+      await runAgent({
+        mode: 'analyze',
+        imageBase64,
+        blobUrl: sasUrl,
+        videoFrames,
+        mimeType,
+        userId: user.id,
+        uploadDir: UPLOAD_DIR,
+        onEvent: (event) => sendSse(res, event.type, event)
+      });
+    } catch (err) {
+      await refundCredit(user.id, creditType).catch(() => {});
+      sendSse(res, 'error', { error: err.message || 'Agent failed' });
+      res.end();
+      return;
+    }
 
     res.end();
     return;
@@ -410,30 +459,8 @@ async function route(req, res) {
     const { suggestion, media_asset_id } = body;
     if (!suggestion) return sendJson(res, 400, { error: 'suggestion is required' });
 
-    const space = await findOrCreateSpace(user.id, suggestion.space.name);
-    const position = await findOrCreatePosition(space.id, user.id, suggestion.position.name, suggestion.position.description);
-
-    if (media_asset_id) {
-      await updateMediaAssetPosition(media_asset_id, position.id);
-    }
-
-    const allItems = [
-      ...(suggestion.containers || []).flatMap((c) => c.items.map((i) => ({ ...i, container: c.name }))),
-      ...(suggestion.loose_items || []).map((i) => ({ ...i, container: null }))
-    ];
-
-    let savedCount = 0;
-    for (const input of allItems) {
-      if (input.status === 'missing') continue;
-      const name = String(input.name || '').trim();
-      if (!name) continue;
-
-      const item = await findOrCreateItem(user.id, name, input.description);
-      await createItemRecord(user.id, item.id, position.id, media_asset_id, input.container, input.note);
-      savedCount++;
-    }
-
-    return sendJson(res, 200, { space, position, saved_count: savedCount });
+    const result = await confirmAndSave(user.id, suggestion, media_asset_id);
+    return sendJson(res, 200, result);
   }
 
   return sendJson(res, 404, { error: 'Not found' });

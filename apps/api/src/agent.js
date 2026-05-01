@@ -215,49 +215,45 @@ export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames,
         const viewResult = await executeTool(call.name, call.arguments, userId, uploadDir);
         if (viewResult.blob_url) {
           try {
+            let imageContent;
             if (viewResult.blob_url.startsWith('https://')) {
-              // Blob URL — pass directly to AI
-              result = { viewed: true, photo_description: `照片 ${viewResult.media_asset_id}` };
-              toolOutputs.push({
-                type: 'function_call_output',
-                call_id: call.id,
-                output: JSON.stringify({ viewed: true })
-              });
-              input = [...(Array.isArray(input) ? input : []), {
-                role: 'user',
-                content: [buildImageUrl(viewResult.blob_url)]
-              }];
-              emit({ type: 'tool_result', tool: call.name, result: { viewed: true, blob_url: viewResult.blob_url } });
-              continue;
+              imageContent = buildImageUrl(viewResult.blob_url);
+            } else {
+              const filePath = path.join(uploadDir, path.basename(viewResult.blob_url));
+              const fileData = await readFile(filePath);
+              const base64 = await compressImageBase64(fileData.toString('base64'));
+              imageContent = buildImageInput(base64, 'image/jpeg');
             }
-            // Local file fallback — compress and use base64
-            const filePath = path.join(uploadDir, path.basename(viewResult.blob_url));
-            const fileData = await readFile(filePath);
-            const base64 = await compressImageBase64(fileData.toString('base64'));
-            result = { viewed: true, photo_description: `照片 ${viewResult.media_asset_id}` };
+            // Return tool output as string, then append image as user message
+            toolOutputs.push({
+              type: 'function_call_output',
+              call_id: call.id,
+              output: JSON.stringify({ viewed: true, media_asset_id: viewResult.media_asset_id, question: viewResult.question })
+            });
+            toolOutputs.push({
+              role: 'user',
+              content: [imageContent]
+            });
             emit({ type: 'tool_result', tool: call.name, result: { viewed: true, blob_url: viewResult.blob_url } });
           } catch {
             result = { error: '无法读取照片文件' };
             emit({ type: 'tool_result', tool: call.name, result });
+            toolOutputs.push({ type: 'function_call_output', call_id: call.id, output: JSON.stringify(result) });
           }
         } else {
           result = viewResult;
           emit({ type: 'tool_result', tool: call.name, result });
+          toolOutputs.push({ type: 'function_call_output', call_id: call.id, output: JSON.stringify(result) });
         }
       } else {
         result = await executeTool(call.name, call.arguments, userId, uploadDir);
         emit({ type: 'tool_result', tool: call.name, result });
+        toolOutputs.push({ type: 'function_call_output', call_id: call.id, output: JSON.stringify(result) });
       }
 
-      if (call.name === 'suggest_save' && result.suggestion) {
+      if (call.name === 'suggest_save' && result?.suggestion) {
         suggestion = result.suggestion;
       }
-
-      toolOutputs.push({
-        type: 'function_call_output',
-        call_id: call.id,
-        output: JSON.stringify(result)
-      });
     }
 
     input = toolOutputs;

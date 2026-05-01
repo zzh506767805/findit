@@ -68,14 +68,27 @@ export async function getUserCredits(userId) {
 }
 
 export async function consumeCredit(userId) {
-  const credits = await getUserCredits(userId);
-  if (credits.total <= 0) {
-    throw Object.assign(new Error('识别次数已用完，请购买年卡继续使用'), { status: 403 });
-  }
-  if (credits.free > 0) {
-    await query('UPDATE users SET free_credits = free_credits - 1 WHERE id = $1', [userId]);
+  // Atomic: try free first, then paid
+  const freeRows = await query(
+    'UPDATE users SET free_credits = free_credits - 1 WHERE id = $1 AND free_credits > 0 RETURNING id',
+    [userId]
+  );
+  if (freeRows.length) return 'free';
+
+  const paidRows = await query(
+    'UPDATE users SET paid_credits = paid_credits - 1 WHERE id = $1 AND paid_credits > 0 RETURNING id',
+    [userId]
+  );
+  if (paidRows.length) return 'paid';
+
+  throw Object.assign(new Error('识别次数已用完，请购买年卡继续使用'), { status: 403 });
+}
+
+export async function refundCredit(userId, type) {
+  if (type === 'free') {
+    await query('UPDATE users SET free_credits = free_credits + 1 WHERE id = $1', [userId]);
   } else {
-    await query('UPDATE users SET paid_credits = paid_credits - 1 WHERE id = $1', [userId]);
+    await query('UPDATE users SET paid_credits = paid_credits + 1 WHERE id = $1', [userId]);
   }
 }
 
@@ -303,4 +316,85 @@ export async function getMediaAsset(userId, mediaAssetId) {
 
 export function formatLocationPath(spaceName, positionName) {
   return [spaceName, positionName].filter(Boolean).join(' / ');
+}
+
+// ─── Transactional Confirm ───
+
+export async function confirmAndSave(userId, suggestion, mediaAssetId) {
+  const client = await pool().connect();
+  try {
+    await client.query('BEGIN');
+
+    // findOrCreateSpace
+    let space;
+    const existingSpace = await client.query('SELECT * FROM spaces WHERE user_id = $1 AND name = $2', [userId, suggestion.space.name]);
+    if (existingSpace.rows.length) {
+      space = existingSpace.rows[0];
+    } else {
+      const id = newId();
+      const r = await client.query('INSERT INTO spaces (id, user_id, name) VALUES ($1, $2, $3) RETURNING *', [id, userId, suggestion.space.name]);
+      space = r.rows[0];
+    }
+
+    // findOrCreatePosition
+    let position;
+    const existingPos = await client.query('SELECT * FROM positions WHERE space_id = $1 AND name = $2', [space.id, suggestion.position.name]);
+    if (existingPos.rows.length) {
+      position = existingPos.rows[0];
+    } else {
+      const id = newId();
+      const r = await client.query(
+        'INSERT INTO positions (id, space_id, user_id, name, description) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+        [id, space.id, userId, suggestion.position.name, suggestion.position.description || '']
+      );
+      position = r.rows[0];
+    }
+
+    if (mediaAssetId) {
+      await client.query('UPDATE media_assets SET position_id = $1 WHERE id = $2', [position.id, mediaAssetId]);
+    }
+
+    const allItems = [
+      ...(suggestion.containers || []).flatMap((c) => c.items.map((i) => ({ ...i, container: c.name }))),
+      ...(suggestion.loose_items || []).map((i) => ({ ...i, container: null }))
+    ];
+
+    let savedCount = 0;
+    for (const input of allItems) {
+      if (input.status === 'missing') continue;
+      const name = String(input.name || '').trim();
+      if (!name) continue;
+
+      let item;
+      const existingItem = await client.query('SELECT * FROM items WHERE user_id = $1 AND name = $2', [userId, name]);
+      if (existingItem.rows.length) {
+        item = existingItem.rows[0];
+        if (input.description && !item.description) {
+          await client.query('UPDATE items SET description = $1 WHERE id = $2', [input.description, item.id]);
+        }
+      } else {
+        const id = newId();
+        const r = await client.query(
+          'INSERT INTO items (id, user_id, name, description) VALUES ($1, $2, $3, $4) RETURNING *',
+          [id, userId, name, input.description || '']
+        );
+        item = r.rows[0];
+      }
+
+      const recordId = newId();
+      await client.query(
+        'INSERT INTO item_records (id, user_id, item_id, position_id, media_asset_id, container, note) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+        [recordId, userId, item.id, position.id, mediaAssetId || null, input.container || null, input.note || '']
+      );
+      savedCount++;
+    }
+
+    await client.query('COMMIT');
+    return { space, position, saved_count: savedCount };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }

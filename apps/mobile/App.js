@@ -21,8 +21,6 @@ import SpacesScreen from './src/screens/SpacesScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import PaywallScreen from './src/screens/PaywallScreen';
 
-const AnimatedFeather = Animated.createAnimatedComponent(Feather);
-const AnimatedText = Animated.createAnimatedComponent(Text);
 
 const tabs = [
   { id: 'assistant', label: '助手', icon: 'message-circle', width: 70 },
@@ -89,6 +87,8 @@ export default function App() {
     extrapolate: 'clamp'
   });
 
+  const [dataVersion, setDataVersion] = useState(0);
+  const handleDataChanged = useCallback(() => setDataVersion((v) => v + 1), []);
   const session = useMemo(() => ({ apiUrl, token }), [apiUrl, token]);
 
   function handleLogin(data) {
@@ -184,8 +184,8 @@ export default function App() {
                     { transform: [{ translateY: tabLift }, { scale: tabScale }] }
                   ]}
                 >
-                  <AnimatedFeather name={t.icon} size={14} color={tabColor} />
-                  <AnimatedText style={[s.tabLabel, { color: tabColor }]}>{t.label}</AnimatedText>
+                  <Feather name={t.icon} size={14} color={tab === t.id ? colors.text : colors.textDim} />
+                  <Text style={[s.tabLabel, { color: tab === t.id ? colors.text : colors.textDim }]}>{t.label}</Text>
                 </Animated.View>
               </Pressable>
             );
@@ -206,7 +206,7 @@ export default function App() {
               }
             ]}
           >
-            <AssistantScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} />
+            <AssistantScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} onDataChanged={handleDataChanged} />
           </Animated.View>
           <Animated.View
             pointerEvents={tab === 'spaces' ? 'auto' : 'none'}
@@ -219,7 +219,7 @@ export default function App() {
               }
             ]}
           >
-            <SpacesScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} />
+            <SpacesScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} dataVersion={dataVersion} />
           </Animated.View>
         </View>
       </KeyboardAvoidingView>

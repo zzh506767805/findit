@@ -11,14 +11,14 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 
 import { requestJson } from '../api';
-import { streamAgent } from '../sse';
+import { streamAgentUpload } from '../sse';
 import { AppIcon, EmptyState } from '../ui';
 import { colors, radius } from '../theme';
 import AgentWorkflow from '../components/AgentWorkflow';
 import SuggestionCard from '../components/SuggestionCard';
 import SpaceDetailScreen from './SpaceDetailScreen';
 
-export default function SpacesScreen({ session, onDataChanged }) {
+export default function SpacesScreen({ session, onDataChanged, dataVersion, onNeedCredits, onCreditsChanged }) {
   const [data, setData] = useState({ spaces: [], total_spaces: 0, total_items: 0 });
   const [refreshing, setRefreshing] = useState(false);
   const [selectedSpace, setSelectedSpace] = useState(null);
@@ -30,7 +30,7 @@ export default function SpacesScreen({ session, onDataChanged }) {
 
   const load = useCallback(async () => {
     try { setData(await requestJson('/spaces', session)); } catch {}
-  }, [session]);
+  }, [session, dataVersion]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -50,27 +50,36 @@ export default function SpacesScreen({ session, onDataChanged }) {
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert('需要权限'); return; }
 
+    const options = { mediaTypes: ['images', 'videos'], videoMaxDuration: 10, quality: 0.72 };
     const result = source === 'camera'
-      ? await ImagePicker.launchCameraAsync({ base64: true, quality: 0.72 })
-      : await ImagePicker.launchImageLibraryAsync({ base64: true, quality: 0.72 });
+      ? await ImagePicker.launchCameraAsync(options)
+      : await ImagePicker.launchImageLibraryAsync(options);
     if (result.canceled || !result.assets?.[0]) return;
 
     const asset = result.assets[0];
+    const isVideo = asset.type === 'video' || asset.uri?.match(/\.(mp4|mov|m4v)$/i);
+    const mime = isVideo ? 'video/mp4' : (asset.mimeType || 'image/jpeg');
     setAnalyzing(true);
     setAgentSteps([]);
     setAgentSuggestion(null);
     setAgentMediaId(null);
 
     try {
-      await streamAgent(session.apiUrl, session.token, '/agent/analyze', {
-        imageBase64: asset.base64, mimeType: asset.mimeType || 'image/jpeg'
-      }, (e) => {
+      await streamAgentUpload(session.apiUrl, session.token, '/agent/analyze',
+        asset.uri, mime, (e) => {
         if (e.type === 'media') setAgentMediaId(e.media_asset_id);
         else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
           setAgentSteps((p) => [...p, e]);
         else if (e.type === 'done' && e.suggestion) setAgentSuggestion(e.suggestion);
       });
-    } catch (err) { Alert.alert('识别失败', err.message); }
+      onCreditsChanged?.();
+    } catch (err) {
+      if (err.message?.includes('已用完')) {
+        onNeedCredits?.();
+      } else {
+        Alert.alert('识别失败', err.message);
+      }
+    }
     finally { setAnalyzing(false); }
   }
 
