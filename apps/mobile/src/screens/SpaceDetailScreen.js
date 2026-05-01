@@ -22,7 +22,7 @@ function formatPositionItems(pos) {
   return `${firstItem}等${count}件物品`;
 }
 
-export default function SpaceDetailScreen({ session, space, onBack, onPhoto }) {
+export default function SpaceDetailScreen({ session, space, onBack, onPhoto, analysisPanel, photoBusy }) {
   const [positions, setPositions] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -64,6 +64,8 @@ export default function SpaceDetailScreen({ session, space, onBack, onPhoto }) {
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.textDim} />}>
 
+        {analysisPanel}
+
         {positions.length > 0 ? positions.map((pos) => (
           <View key={pos.id}>
             <Pressable style={({ pressed }) => [s.posCard, pressed && s.pressed]}
@@ -86,16 +88,46 @@ export default function SpaceDetailScreen({ session, space, onBack, onPhoto }) {
 
             {expanded === pos.id && detail ? (
               <View style={s.detail}>
-                {detail.photo_url ? (
-                  <Image source={{ uri: fullImageUrl(session.apiUrl, detail.photo_url) }} style={s.detailPhoto} />
+                {(detail.photos?.length || detail.photo_url) ? (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.photoStrip} contentContainerStyle={s.photoStripBody}>
+                    {(detail.photos || [{ url: detail.photo_url }]).map((p, pi) => (
+                      <Image key={pi} source={{ uri: fullImageUrl(session.apiUrl, p.url) }} style={s.detailPhoto} />
+                    ))}
+                  </ScrollView>
                 ) : null}
-                <View style={s.tags}>
-                  {(detail.containers || []).flatMap((c) => c.items).concat(detail.loose_items || []).map((item, idx) => (
-                    <View key={idx} style={s.tag}>
-                      <Text style={s.tagText}>{item.item_name}</Text>
+                {(detail.containers || []).map((c, ci) => (
+                  <View key={`c-${ci}`} style={s.itemGroup}>
+                    <View style={s.groupHeader}>
+                      <AppIcon name="box" size={13} color={colors.textDim} />
+                      <Text style={s.groupName}>{c.name}</Text>
                     </View>
-                  ))}
-                </View>
+                    {c.items.map((item, ii) => (
+                      <View key={ii} style={s.itemRow}>
+                        <View style={s.itemDot} />
+                        <View style={s.itemInfo}>
+                          <Text style={s.itemName}>{item.item_name}</Text>
+                          {item.description ? <Text style={s.itemDesc} numberOfLines={1}>{item.description}</Text> : null}
+                        </View>
+                        {item.recorded_at ? <Text style={s.itemDate}>{item.recorded_at.slice(5, 10)}</Text> : null}
+                      </View>
+                    ))}
+                  </View>
+                ))}
+                {(detail.loose_items || []).length > 0 ? (
+                  <View style={s.itemGroup}>
+                    <Text style={s.groupNameLoose}>其他物品</Text>
+                    {detail.loose_items.map((item, ii) => (
+                      <View key={ii} style={s.itemRow}>
+                        <View style={s.itemDot} />
+                        <View style={s.itemInfo}>
+                          <Text style={s.itemName}>{item.item_name}</Text>
+                          {item.description ? <Text style={s.itemDesc} numberOfLines={1}>{item.description}</Text> : null}
+                        </View>
+                        {item.recorded_at ? <Text style={s.itemDate}>{item.recorded_at.slice(5, 10)}</Text> : null}
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -105,9 +137,10 @@ export default function SpaceDetailScreen({ session, space, onBack, onPhoto }) {
       </ScrollView>
 
       <View style={s.bottomBar}>
-        <Pressable style={({ pressed }) => [s.photoBtn, pressed && s.pressed]} onPress={onPhoto}>
+        <Pressable style={({ pressed }) => [s.photoBtn, pressed && s.pressed, photoBusy && s.disabled]}
+          onPress={onPhoto} disabled={photoBusy}>
           <AppIcon name="camera" size={17} color={colors.bg} />
-          <Text style={s.photoBtnText}>拍这个房间</Text>
+          <Text style={s.photoBtnText}>{photoBusy ? '正在识别' : '拍这个房间'}</Text>
         </Pressable>
       </View>
     </View>
@@ -143,19 +176,21 @@ const s = StyleSheet.create({
   detail: {
     borderRadius: radius.md, backgroundColor: colors.bgRaised,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line,
-    padding: 12, marginTop: 4, gap: 10
+    padding: 12, marginTop: 4, gap: 12
   },
-  detailPhoto: { width: '100%', height: 180, borderRadius: radius.md, backgroundColor: colors.bgCard },
-  detailGroup: { gap: 6 },
-  detailGroupHeader: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  detailGroupName: { color: colors.textSecondary, fontSize: 13, fontWeight: '700' },
-  looseLabel: { color: colors.textDim, fontSize: 12, fontWeight: '600' },
-  tags: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
-  tag: {
-    paddingHorizontal: 10, paddingVertical: 5,
-    borderRadius: radius.full, backgroundColor: colors.bgInput
-  },
-  tagText: { color: colors.textSecondary, fontSize: 13, fontWeight: '600' },
+  photoStrip: { marginHorizontal: -12 },
+  photoStripBody: { paddingHorizontal: 12, gap: 8 },
+  detailPhoto: { width: 220, height: 165, borderRadius: radius.md, backgroundColor: colors.bgCard },
+  itemGroup: { gap: 6 },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 2 },
+  groupName: { color: colors.textSecondary, fontSize: 13, fontWeight: '700' },
+  groupNameLoose: { color: colors.textDim, fontSize: 12, fontWeight: '600', marginBottom: 2 },
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 5, paddingHorizontal: 4 },
+  itemDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.textDim, marginTop: 1 },
+  itemInfo: { flex: 1, minWidth: 0 },
+  itemName: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  itemDesc: { color: colors.textDim, fontSize: 12, marginTop: 1 },
+  itemDate: { color: colors.textTertiary, fontSize: 11 },
   bottomBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     padding: 20, backgroundColor: colors.bg
@@ -165,5 +200,6 @@ const s = StyleSheet.create({
     gap: 8, minHeight: 50, borderRadius: radius.full, backgroundColor: colors.primary
   },
   photoBtnText: { color: colors.white, fontSize: 16, fontWeight: '700' },
-  pressed: { opacity: 0.7 }
+  pressed: { opacity: 0.7 },
+  disabled: { opacity: 0.35 }
 });

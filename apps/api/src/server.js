@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { BlobServiceClient, StorageSharedKeyCredential, generateBlobSASQueryParameters, BlobSASPermissions } from '@azure/storage-blob';
+import { getBlobUrl, getBlobSasUrl, uploadToBlob } from './blob.js';
 
 const execFileAsync = promisify(execFile);
 import { runAgent, getAzureConfigStatus } from './agent.js';
@@ -117,56 +117,7 @@ function getUserId(req) {
   return null;
 }
 
-// ─── Azure Blob Storage ───
-
-let _blobCredential;
-let _blobServiceClient;
-
-function getBlobServiceClient() {
-  const account = process.env.AZURE_STORAGE_ACCOUNT;
-  const key = process.env.AZURE_STORAGE_KEY;
-  if (!account || !key) return null;
-  if (!_blobServiceClient) {
-    _blobCredential = new StorageSharedKeyCredential(account, key);
-    _blobServiceClient = new BlobServiceClient(`https://${account}.blob.core.windows.net`, _blobCredential);
-  }
-  return _blobServiceClient;
-}
-
-function getBlobUrl(blobName) {
-  const account = process.env.AZURE_STORAGE_ACCOUNT;
-  const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
-  return `https://${account}.blob.core.windows.net/${container}/${blobName}`;
-}
-
-function getBlobSasUrl(blobUrl) {
-  if (!blobUrl.startsWith('https://')) return blobUrl;
-  if (!_blobCredential) getBlobServiceClient();
-  if (!_blobCredential) return blobUrl;
-  const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
-  const blobName = blobUrl.split('/').pop().split('?')[0];
-  const expiry = new Date();
-  expiry.setHours(expiry.getHours() + 1);
-
-  const sasQuery = generateBlobSASQueryParameters({
-    containerName: container,
-    blobName,
-    permissions: BlobSASPermissions.parse('r'),
-    expiresOn: expiry
-  }, _blobCredential).toString();
-
-  return `${blobUrl.split('?')[0]}?${sasQuery}`;
-}
-
-async function uploadToBlob(buffer, blobName, contentType) {
-  const client = getBlobServiceClient();
-  const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
-  const blockBlob = client.getContainerClient(container).getBlockBlobClient(blobName);
-  await blockBlob.upload(buffer, buffer.length, {
-    blobHTTPHeaders: { blobContentType: contentType }
-  });
-  return getBlobUrl(blobName);
-}
+// ─── Azure Blob Storage (see blob.js) ───
 
 async function saveBase64Image({ imageBase64, mimeType }) {
   const mediaId = newId();
@@ -349,7 +300,8 @@ async function route(req, res) {
 
   if (method === 'GET' && url.pathname === '/conversation') {
     const conv = await getOrCreateConversation(user.id);
-    const messages = await getConversationMessages(conv.id);
+    const source = url.searchParams.get('source') || undefined;
+    const messages = await getConversationMessages(conv.id, { source });
     return sendJson(res, 200, { conversation: conv, messages });
   }
 
@@ -415,13 +367,15 @@ async function route(req, res) {
       saved = await saveBase64Image({ imageBase64, mimeType });
     }
 
+    const source = url.searchParams.get('source') || 'assistant';
+
     const creditType = await consumeCredit(user.id);
     await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, saved.contentType || mimeType);
 
     const conv = await getOrCreateConversation(user.id);
     await createMessage(conv.id, user.id, {
       role: 'user', type: saved.isVideo ? 'video' : 'photo',
-      blobUrl: saved.blobUrl, mediaAssetId: saved.mediaId
+      blobUrl: saved.blobUrl, mediaAssetId: saved.mediaId, source
     });
 
     res.writeHead(200, {
@@ -436,7 +390,7 @@ async function route(req, res) {
 
     let agentAnswer = '';
     let agentSuggestion = null;
-    log('starting AI agent');
+    log(`starting AI agent (source=${source})`);
 
     try {
       const result = await runAgent({
@@ -458,7 +412,7 @@ async function route(req, res) {
       log('AI agent done');
       const agentMsg = await createMessage(conv.id, user.id, {
         role: 'agent', type: 'answer', content: agentAnswer,
-        suggestion: agentSuggestion, mediaAssetId: saved.mediaId
+        suggestion: agentSuggestion, mediaAssetId: saved.mediaId, source
       });
       if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
       sendSse(res, 'message_saved', { message_id: agentMsg.id });
@@ -488,6 +442,7 @@ async function route(req, res) {
     });
 
     let agentAnswer = '';
+    let agentSuggestion = null;
 
     const result = await runAgent({
       mode: 'query',
@@ -498,11 +453,13 @@ async function route(req, res) {
       onEvent: (event) => {
         sendSse(res, event.type, event);
         if (event.type === 'answer') agentAnswer = event.text || '';
+        if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
       }
     });
 
     const agentMsg = await createMessage(conv.id, user.id, {
-      role: 'agent', type: 'answer', content: agentAnswer
+      role: 'agent', type: 'answer', content: agentAnswer,
+      suggestion: agentSuggestion
     });
     if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
     sendSse(res, 'message_saved', { message_id: agentMsg.id });
@@ -519,7 +476,7 @@ async function route(req, res) {
     if (!suggestion) return sendJson(res, 400, { error: 'suggestion is required' });
 
     const result = await confirmAndSave(user.id, suggestion, media_asset_id);
-    if (message_id) await updateMessageConfirmed(message_id);
+    if (message_id) await updateMessageConfirmed(message_id, user.id);
     return sendJson(res, 200, result);
   }
 

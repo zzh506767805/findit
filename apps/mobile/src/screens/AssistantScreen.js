@@ -13,6 +13,7 @@ import {
   View
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import Markdown from 'react-native-markdown-display';
 
 import { requestJson } from '../api';
 import { streamAgent, streamAgentUpload } from '../sse';
@@ -73,9 +74,11 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
   useEffect(() => {
     (async () => {
       try {
-        const data = await requestJson('/conversation', session);
+        const data = await requestJson('/conversation?source=assistant', session);
         if (data.messages?.length) {
           setMessages(data.messages.map(serverMsgToLocal));
+        } else {
+          setMessages([]);
         }
       } catch {}
       setLoadingHistory(false);
@@ -142,10 +145,16 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
       else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
       else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
       else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
+      else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
     };
 
     try {
-      await streamAgentUpload(session.apiUrl, session.token, '/agent/analyze', asset.uri, mime, handleEvent);
+      let fileData = asset.uri;
+      if (Platform.OS === 'web') {
+        const resp = await fetch(asset.uri);
+        fileData = await resp.blob();
+      }
+      await streamAgentUpload(session.apiUrl, session.token, '/agent/analyze', fileData, mime, handleEvent);
       onCreditsChanged?.();
     } catch (err) {
       if (err.message?.includes('已用完')) {
@@ -170,7 +179,9 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
         if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
           patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
         else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
+        else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
         else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
+        else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
       });
     } catch (err) {
       patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
@@ -247,11 +258,17 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
             );
           }
           if (msg.role === 'agent') {
+            const hasAnswerStep = msg.steps?.some((step) => step.type === 'answer');
             return (
               <View key={i} style={s.agentRow}>
                 {msg.steps?.length > 0 ? <AgentWorkflow steps={msg.steps} apiUrl={session.apiUrl} /> : null}
                 {!msg.answer && !msg.suggestion && !msg.confirmed ? (
                   <View style={s.agentLoading}><TypingDots /></View>
+                ) : null}
+                {msg.answer && !hasAnswerStep ? (
+                  <View style={s.agentAnswer}>
+                    <Markdown style={mdStyles}>{msg.answer}</Markdown>
+                  </View>
                 ) : null}
                 {msg.suggestion && !msg.confirmed ? (
                   <SuggestionCard suggestion={msg.suggestion}
@@ -273,12 +290,18 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
 
         <View style={s.dock}>
           <Pressable style={({ pressed }) => [s.camBtn, pressed && s.pressed]}
-            onPress={() => Alert.alert('记录方式', '', [
-              { text: '拍照', onPress: () => pickMedia('camera', 'image') },
-              { text: '录像', onPress: () => pickMedia('camera', 'video') },
-              { text: '从相册选', onPress: () => pickMedia('library') },
-              { text: '取消', style: 'cancel' }
-            ])} disabled={busy}>
+            onPress={() => {
+              if (Platform.OS === 'web') {
+                pickMedia('library');
+              } else {
+                Alert.alert('记录方式', '', [
+                  { text: '拍照', onPress: () => pickMedia('camera', 'image') },
+                  { text: '录像', onPress: () => pickMedia('camera', 'video') },
+                  { text: '从相册选', onPress: () => pickMedia('library') },
+                  { text: '取消', style: 'cancel' }
+                ]);
+              }
+            }} disabled={busy}>
             <AppIcon name="camera" size={20} color={colors.white} />
           </Pressable>
           <View style={s.inputWrap}>
@@ -319,6 +342,10 @@ const s = StyleSheet.create({
     backgroundColor: colors.bgInput, borderRadius: radius.lg, borderBottomLeftRadius: radius.xs,
     paddingHorizontal: 16, paddingVertical: 12, alignSelf: 'flex-start'
   },
+  agentAnswer: {
+    backgroundColor: colors.bgInput, borderRadius: radius.lg, borderBottomLeftRadius: radius.xs,
+    paddingHorizontal: 16, paddingVertical: 10, alignSelf: 'flex-start', maxWidth: '86%'
+  },
   typingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 },
   typingLabel: { color: colors.textTertiary, fontSize: 14 },
   typingDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.textTertiary },
@@ -346,3 +373,13 @@ const s = StyleSheet.create({
   pressed: { opacity: 0.7 },
   disabled: { opacity: 0.3 }
 });
+
+const mdStyles = {
+  body: { color: colors.text, fontSize: 15, lineHeight: 22 },
+  strong: { fontWeight: '700', color: colors.text },
+  paragraph: { marginTop: 0, marginBottom: 4 },
+  bullet_list: { marginTop: 2, marginBottom: 2 },
+  ordered_list: { marginTop: 2, marginBottom: 2 },
+  list_item: { marginTop: 1 },
+  code_inline: { backgroundColor: colors.bgRaised, borderRadius: 3, paddingHorizontal: 4, fontSize: 13, color: colors.textSecondary }
+};

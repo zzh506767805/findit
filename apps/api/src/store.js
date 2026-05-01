@@ -122,7 +122,7 @@ export async function findOrCreateSpace(userId, name) {
 export async function listPositions(spaceId, userId) {
   return query(`
     SELECT p.*,
-      (SELECT count(*) FROM item_records ir WHERE ir.position_id = p.id) AS item_count,
+      (SELECT count(DISTINCT ir.item_id) FROM item_records ir WHERE ir.position_id = p.id) AS item_count,
       (SELECT array_agg(DISTINCT i.name) FROM item_records ir JOIN items i ON ir.item_id = i.id WHERE ir.position_id = p.id) AS item_names,
       (SELECT ma.blob_url FROM item_records ir2 JOIN media_assets ma ON ir2.media_asset_id = ma.id
         WHERE ir2.position_id = p.id ORDER BY ir2.recorded_at DESC LIMIT 1) AS latest_photo_url,
@@ -181,11 +181,20 @@ export async function getPositionDetail(posId, userId) {
     }
   }
 
-  const latestPhoto = records[0]?.photo_url || null;
+  // Collect all distinct photos for this position
+  const photoSet = new Set();
+  const photos = [];
+  for (const r of records) {
+    if (r.photo_url && !photoSet.has(r.photo_url)) {
+      photoSet.add(r.photo_url);
+      photos.push({ url: r.photo_url, recorded_at: r.recorded_at });
+    }
+  }
 
   return {
     position: pos, space,
-    photo_url: latestPhoto,
+    photo_url: photos[0]?.url || null,
+    photos,
     containers: Object.entries(grouped).map(([name, items]) => ({ name, items })),
     loose_items: loose,
     total_items: unique.length
@@ -266,7 +275,7 @@ export async function getSpacesList(userId) {
 export async function getPositionsBySpaceName(userId, spaceName) {
   return query(`
     SELECT p.id, p.name, p.description,
-      (SELECT count(*) FROM item_records ir WHERE ir.position_id = p.id) AS item_count,
+      (SELECT count(DISTINCT ir.item_id) FROM item_records ir WHERE ir.position_id = p.id) AS item_count,
       (SELECT ir2.media_asset_id FROM item_records ir2 WHERE ir2.position_id = p.id ORDER BY ir2.recorded_at DESC LIMIT 1) AS latest_photo_id
     FROM positions p
     JOIN spaces s ON p.space_id = s.id
@@ -329,8 +338,11 @@ export async function initConversationTables() {
     id UUID PRIMARY KEY, conversation_id UUID NOT NULL REFERENCES conversations(id),
     user_id UUID NOT NULL, role VARCHAR(10) NOT NULL, type VARCHAR(10) NOT NULL,
     content TEXT, blob_url TEXT, suggestion JSONB, media_asset_id UUID,
-    confirmed BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW()
+    confirmed BOOLEAN DEFAULT FALSE, source VARCHAR(20) DEFAULT 'assistant',
+    created_at TIMESTAMPTZ DEFAULT NOW()
   )`);
+  // Add source column if table already exists
+  await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'assistant'`).catch(() => {});
 }
 
 export async function getOrCreateConversation(userId) {
@@ -349,23 +361,34 @@ export async function createConversation(userId) {
   return rows[0];
 }
 
-export async function getConversationMessages(conversationId, limit = 50) {
-  return query('SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT $2', [conversationId, limit]);
+export async function getConversationMessages(conversationId, { limit = 50, source } = {}) {
+  if (source) {
+    return query(`
+      SELECT * FROM (
+        SELECT * FROM messages WHERE conversation_id = $1 AND source = $3 ORDER BY created_at DESC LIMIT $2
+      ) recent ORDER BY created_at ASC
+    `, [conversationId, limit, source]);
+  }
+  return query(`
+    SELECT * FROM (
+      SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2
+    ) recent ORDER BY created_at ASC
+  `, [conversationId, limit]);
 }
 
-export async function createMessage(conversationId, userId, { role, type, content, blobUrl, suggestion, mediaAssetId, confirmed }) {
+export async function createMessage(conversationId, userId, { role, type, content, blobUrl, suggestion, mediaAssetId, confirmed, source }) {
   const id = newId();
   const rows = await query(
-    `INSERT INTO messages (id, conversation_id, user_id, role, type, content, blob_url, suggestion, media_asset_id, confirmed)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    `INSERT INTO messages (id, conversation_id, user_id, role, type, content, blob_url, suggestion, media_asset_id, confirmed, source)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
     [id, conversationId, userId, role, type, content || null, blobUrl || null,
-     suggestion ? JSON.stringify(suggestion) : null, mediaAssetId || null, confirmed || false]
+     suggestion ? JSON.stringify(suggestion) : null, mediaAssetId || null, confirmed || false, source || 'assistant']
   );
   return rows[0];
 }
 
-export async function updateMessageConfirmed(messageId) {
-  await query('UPDATE messages SET confirmed = true WHERE id = $1', [messageId]);
+export async function updateMessageConfirmed(messageId, userId) {
+  await query('UPDATE messages SET confirmed = true WHERE id = $1 AND user_id = $2', [messageId, userId]);
 }
 
 export async function updateMessageSuggestion(messageId, suggestion) {
@@ -374,6 +397,51 @@ export async function updateMessageSuggestion(messageId, suggestion) {
 
 export async function updateConversationResponseId(conversationId, responseId) {
   await query('UPDATE conversations SET last_response_id = $1, updated_at = NOW() WHERE id = $2', [responseId, conversationId]);
+}
+
+// ─── Update & Delete Items ───
+
+export async function updateItem(userId, itemName, updates) {
+  // Find the item
+  const items = await query('SELECT * FROM items WHERE user_id = $1 AND name = $2', [userId, itemName]);
+  if (!items.length) return { error: `没有找到物品"${itemName}"` };
+  const item = items[0];
+
+  // Update name/description on items table
+  if (updates.new_name) {
+    await query('UPDATE items SET name = $1 WHERE id = $2', [updates.new_name, item.id]);
+  }
+  if (updates.description) {
+    await query('UPDATE items SET description = $1 WHERE id = $2', [updates.description, item.id]);
+  }
+
+  // Move to new position if specified
+  if (updates.space_name && updates.position_name) {
+    const space = await findOrCreateSpace(userId, updates.space_name);
+    const position = await findOrCreatePosition(space.id, userId, updates.position_name);
+    await query(
+      'UPDATE item_records SET position_id = $1, container = $2 WHERE item_id = $3 AND user_id = $4',
+      [position.id, updates.container || null, item.id, userId]
+    );
+  } else if (updates.container !== undefined) {
+    // Just update container within same position
+    await query(
+      'UPDATE item_records SET container = $1 WHERE item_id = $2 AND user_id = $3',
+      [updates.container || null, item.id, userId]
+    );
+  }
+
+  return { success: true, item_name: updates.new_name || itemName };
+}
+
+export async function deleteItem(userId, itemName) {
+  const items = await query('SELECT * FROM items WHERE user_id = $1 AND name = $2', [userId, itemName]);
+  if (!items.length) return { error: `没有找到物品"${itemName}"` };
+  const item = items[0];
+
+  await query('DELETE FROM item_records WHERE item_id = $1 AND user_id = $2', [item.id, userId]);
+  await query('DELETE FROM items WHERE id = $1 AND user_id = $2', [item.id, userId]);
+  return { success: true, deleted: itemName };
 }
 
 // ─── Transactional Confirm ───

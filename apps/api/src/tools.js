@@ -1,4 +1,4 @@
-import { getSpacesList, getPositionsBySpaceName, getPositionItems, getMediaAsset, searchItems } from './store.js';
+import { getSpacesList, getPositionsBySpaceName, getPositionItems, getMediaAsset, searchItems, updateItem, deleteItem } from './store.js';
 
 export const toolDefinitions = [
   {
@@ -48,6 +48,35 @@ export const toolDefinitions = [
       type: 'object',
       properties: { query: { type: 'string', description: '搜索关键词' } },
       required: ['query']
+    }
+  },
+  {
+    type: 'function',
+    name: 'update_item',
+    description: '修改物品信息或移动物品到新位置。可改名、改描述、移动到其他空间/位置/容器。直接执行，无需用户确认。',
+    parameters: {
+      type: 'object',
+      properties: {
+        item_name: { type: 'string', description: '要修改的物品当前名称' },
+        new_name: { type: 'string', description: '新名称（不改则不传）' },
+        description: { type: 'string', description: '新描述（不改则不传）' },
+        space_name: { type: 'string', description: '目标空间名（移动时必传）' },
+        position_name: { type: 'string', description: '目标位置名（移动时必传）' },
+        container: { type: 'string', description: '目标容器名（可选）' }
+      },
+      required: ['item_name']
+    }
+  },
+  {
+    type: 'function',
+    name: 'delete_item',
+    description: '删除一个物品及其所有记录。直接执行，无需用户确认。',
+    parameters: {
+      type: 'object',
+      properties: {
+        item_name: { type: 'string', description: '要删除的物品名称' }
+      },
+      required: ['item_name']
     }
   },
   {
@@ -119,6 +148,18 @@ export async function executeTool(toolName, args, userId, uploadDir) {
 
     case 'suggest_save':
       return { type: 'suggestion', suggestion: args };
+
+    case 'update_item':
+      return await updateItem(userId, args.item_name, {
+        new_name: args.new_name,
+        description: args.description,
+        space_name: args.space_name,
+        position_name: args.position_name,
+        container: args.container
+      });
+
+    case 'delete_item':
+      return await deleteItem(userId, args.item_name);
 
     default:
       return { error: `未知工具: ${toolName}` };

@@ -7,3 +7,4 @@ apps/api/data/uploads/*
 !apps/api/data/uploads/.gitkeep
 npm-debug.log*
 *.log
+.playwright-mcp/

@@ -8,13 +8,14 @@ export function getDefaultApiUrl() {
   if (configured) return configured;
 
   if (__DEV__) {
+    if (Platform.OS === 'web') return 'http://localhost:4000';
     const hostUri =
       Constants.expoConfig?.hostUri ||
       Constants.manifest2?.extra?.expoClient?.hostUri ||
       Constants.manifest?.debuggerHost;
     const host = hostUri?.split(':')[0];
     if (host) return `http://${host}:4000`;
-    return Platform.OS === 'web' ? 'http://localhost:4000' : 'http://127.0.0.1:4000';
+    return 'http://127.0.0.1:4000';
   }
 
   return PRODUCTION_API;

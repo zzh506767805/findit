@@ -6,10 +6,10 @@
 
 ## 技术栈
 
-- 前端：React Native (Expo SDK 54/55)
+- 前端：React Native (Expo SDK 54/55)，支持 Web 开发模式
 - 后端：Node.js（原生 HTTP，无框架，Dockerfile 含 ffmpeg）
 - 数据库：PostgreSQL (Azure Flexible Server)
-- AI：Azure OpenAI Responses API (gpt-5.5) + 工具调用
+- AI：Azure OpenAI Responses API (gpt-5.4-mini) + 工具调用（gpt-5.5/5 太慢且不稳定）
 - 部署：Azure Container Apps (Japan East)
 - 存储：Azure Blob Storage（@azure/storage-blob SDK，SAS URL 读取）
 - 上传：FormData multipart → Blob Storage（已改掉 base64）
@@ -33,8 +33,9 @@ GitHub: https://github.com/zzh506767805/findit
 - 服务器：findit-db.postgres.database.azure.com
 - 数据库名：findit
 - 用户：finditadmin
-- 6 张表：users, spaces, positions, media_assets, items, item_records
+- 8 张表：users, spaces, positions, media_assets, items, item_records, conversations, messages
 - users 额外字段：apple_user_id, free_credits(默认10), paid_credits, subscription_expires_at
+- messages 额外字段：source（'assistant' 或 'spaces'，标记消息来源页面）
 - 防火墙：allow-dev 开放所有IP（开发阶段），allow-azure 开放 Azure 内部
 
 ## App Store
@@ -57,7 +58,7 @@ Find/
 │   │   ├── eas.json              # EAS Build 配置
 │   │   └── src/
 │   │       ├── api.js            # HTTP 请求（开发→本地，正式→线上API）
-│   │       ├── sse.js            # SSE 流式请求 + FormData 上传（XMLHttpRequest）
+│   │       ├── sse.js            # SSE 流式请求 + FormData 上传（XMLHttpRequest，Web 用 Blob）
 │   │       ├── theme.js          # 配色（米白浅色方案）
 │   │       ├── ui.js             # 通用组件
 │   │       ├── components/
@@ -67,15 +68,16 @@ Find/
 │   │           ├── LoginScreen.js       # Apple Sign In + 开发模式 demo 登录
 │   │           ├── PaywallScreen.js     # 付费墙（年卡 + 补充包）
 │   │           ├── AssistantScreen.js   # 助手页（对话，支持拍照/录像/文字）
-│   │           ├── SpacesScreen.js      # 我的家（空间列表）
-│   │           └── SpaceDetailScreen.js # 空间详情
+│   │           ├── SpacesScreen.js      # 我的家（空间列表 + 识别面板）
+│   │           └── SpaceDetailScreen.js # 空间详情（多图横滑 + 物品列表）
 │   └── api/                      # Node.js 后端
 │       ├── Dockerfile            # node:22-slim + ffmpeg（视频截帧用）
 │       ├── .env                  # 环境变量（不提交）
 │       └── src/
 │           ├── server.js         # HTTP 路由 + SSE + FormData 解析
-│           ├── store.js          # PostgreSQL 数据访问 + 用量计费
+│           ├── store.js          # PostgreSQL 数据访问 + 用量计费 + 对话管理
 │           ├── agent.js          # Responses API + 工具调用循环 + 图片压缩
+│           ├── blob.js           # Azure Blob Storage 上传 + SAS URL 生成
 │           └── tools.js          # Agent 工具定义和执行
 ```
 
@@ -86,6 +88,14 @@ Expo App → API (Container Apps) → PostgreSQL
          (FormData upload)      → Blob Storage (照片/视频，SAS URL 访问)
                                 → Azure OpenAI (Responses API + tools，图片用 SAS URL 直传)
 ```
+
+### 对话上下文架构
+- 助手页和我的家页共享同一个 conversation（同一个 previousResponseId 链）
+- messages 表有 `source` 字段：`assistant`（助手页）或 `spaces`（我的家页）
+- 助手页加载历史时只取 source=assistant 的消息，不显示我的家的记录
+- AI 上下文是连续的：从我的家拍照后 AI 记得空间结构，助手页查询时可利用
+- /agent/analyze?source=spaces 或默认 assistant 区分来源
+- /conversation?source=assistant 按来源过滤返回消息
 
 ### Blob Storage
 - 账户：finditstore，容器：data，公开访问已关闭
@@ -102,6 +112,8 @@ Expo App → API (Container Apps) → PostgreSQL
 - view_photo — 查看历史照片（支持 Blob URL 直传 AI）
 - search_items — 搜索物品（匹配 name + description，支持颜色/品牌等特征）
 - suggest_save — 提交识别建议（需用户确认）
+- update_item — 修改物品（名称/描述/位置/容器）
+- delete_item — 删除物品
 
 ### 数据三层结构
 
@@ -114,6 +126,20 @@ Expo App → API (Container Apps) → PostgreSQL
 - 补充包：¥18，120 次识别
 - 查询不限次，只有识别（拍照/录像）扣次数
 - 后端 /agent/analyze 接口调用前 consumeCredit，余额不足返回 403
+
+## 开发调试
+
+```bash
+# Web 开发模式（电脑浏览器测试）
+cd apps/mobile && npx expo start --web
+
+# 本地 API（开发模式自动连 localhost:4000）
+cd apps/api && node src/server.js
+```
+
+api.js 中 `__DEV__` 模式自动连本地 API，Web 端连 localhost:4000。
+Web 端不支持相机，点击拍照按钮直接打开文件选择器。
+sse.js 中 Web 端用 Blob 对象上传（React Native 用 { uri, type, name }）。
 
 ## 发布流程
 
@@ -154,6 +180,10 @@ npx eas-cli build --profile preview --platform ios
 - [x] iOS 发布证书创建（EAS Credentials）
 - [x] EAS 项目配置（eas.json）
 - [x] 域名购买（fangnale.top）
+- [x] 对话上下文（previousResponseId + source 分离显示）
+- [x] 空间详情（多图横滑 + 物品列表 + 去重计数）
+- [x] Web 开发模式（电脑浏览器测试，文件选择上传）
+- [x] 物品编辑/删除（update_item + delete_item 工具）
 
 ### 待做（上架阻断项）
 - [ ] ICP 备案提交（阿里云，需轻量服务器做备案落地）
@@ -166,7 +196,6 @@ npx eas-cli build --profile preview --platform ios
 
 ### 后续迭代
 - [ ] 微信/手机号登录
-- [ ] 上下文对话（previous_response_id + compaction）
 - [ ] iCloud 数据备份
 - [ ] 新手引导
 - [ ] 识别 prompt 持续调优
@@ -188,3 +217,6 @@ npx eas-cli build --profile preview --platform ios
 - 视频限制 10 秒，前端 expo-image-picker videoMaxDuration=10
 - 物品 description 必须包含视觉特征（颜色/品牌/材质），提升模糊搜索召回
 - 防火墙开发阶段全开，上线前收紧
+- 对话上下文：两页共享 conversation + previousResponseId，用 source 字段分开展示
+- 物品计数用 count(DISTINCT item_id) 避免同物品多次记录重复计数
+- Web 端：expo-image-picker 只用 library 模式（无 camera），FormData 用 Blob 对象
