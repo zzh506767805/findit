@@ -40,12 +40,11 @@ export async function getOrCreateDemoUser(email = 'demo@findit.local') {
 }
 
 export async function getOrCreateAppleUser(appleUserId, email, name) {
-  const existing = await query('SELECT * FROM users WHERE apple_user_id = $1', [appleUserId]);
-  if (existing.length) return existing[0];
-
   const id = newId();
   const rows = await query(
-    'INSERT INTO users (id, apple_user_id, email, name) VALUES ($1, $2, $3, $4) RETURNING *',
+    `INSERT INTO users (id, apple_user_id, email, name) VALUES ($1, $2, $3, $4)
+     ON CONFLICT (apple_user_id) DO UPDATE SET email = COALESCE(EXCLUDED.email, users.email)
+     RETURNING *`,
     [id, appleUserId, email, name || 'User']
   );
   return rows[0];
@@ -117,6 +116,24 @@ export async function findOrCreateSpace(userId, name) {
   return rows[0];
 }
 
+export async function createSpace(userId, name) {
+  const id = newId();
+  const rows = await query('INSERT INTO spaces (id, user_id, name) VALUES ($1, $2, $3) RETURNING *', [id, userId, name]);
+  return rows[0];
+}
+
+export async function updateSpace(userId, spaceId, name) {
+  const rows = await query('UPDATE spaces SET name = $1 WHERE id = $2 AND user_id = $3 RETURNING *', [name, spaceId, userId]);
+  return rows[0] || null;
+}
+
+export async function deleteSpace(userId, spaceId) {
+  // Delete all item_records under this space's positions
+  await query(`DELETE FROM item_records WHERE position_id IN (SELECT id FROM positions WHERE space_id = $1 AND user_id = $2)`, [spaceId, userId]);
+  await query('DELETE FROM positions WHERE space_id = $1 AND user_id = $2', [spaceId, userId]);
+  await query('DELETE FROM spaces WHERE id = $1 AND user_id = $2', [spaceId, userId]);
+}
+
 // ─── Positions ───
 
 export async function listPositions(spaceId, userId) {
@@ -142,6 +159,25 @@ export async function findOrCreatePosition(spaceId, userId, name, description) {
   return rows[0];
 }
 
+export async function createPosition(spaceId, userId, name) {
+  const id = newId();
+  const rows = await query(
+    'INSERT INTO positions (id, space_id, user_id, name) VALUES ($1, $2, $3, $4) RETURNING *',
+    [id, spaceId, userId, name]
+  );
+  return rows[0];
+}
+
+export async function updatePosition(userId, posId, name) {
+  const rows = await query('UPDATE positions SET name = $1 WHERE id = $2 AND user_id = $3 RETURNING *', [name, posId, userId]);
+  return rows[0] || null;
+}
+
+export async function deletePosition(userId, posId) {
+  await query('DELETE FROM item_records WHERE position_id = $1 AND user_id = $2', [posId, userId]);
+  await query('DELETE FROM positions WHERE id = $1 AND user_id = $2', [posId, userId]);
+}
+
 // ─── Position Detail ───
 
 export async function getPositionDetail(posId, userId) {
@@ -162,23 +198,11 @@ export async function getPositionDetail(posId, userId) {
 
   // dedupe by item, keep latest
   const seen = new Set();
-  const unique = [];
+  const items = [];
   for (const r of records) {
     if (seen.has(r.item_id)) continue;
     seen.add(r.item_id);
-    unique.push(r);
-  }
-
-  const grouped = {};
-  const loose = [];
-  for (const r of unique) {
-    const item = { item_id: r.item_id, item_name: r.item_name, description: r.item_description, container: r.container, note: r.note, recorded_at: r.recorded_at, photo_url: r.photo_url };
-    if (r.container) {
-      if (!grouped[r.container]) grouped[r.container] = [];
-      grouped[r.container].push(item);
-    } else {
-      loose.push(item);
-    }
+    items.push({ item_id: r.item_id, item_name: r.item_name, description: r.item_description, note: r.note, recorded_at: r.recorded_at, photo_url: r.photo_url });
   }
 
   // Collect all distinct photos for this position
@@ -195,9 +219,8 @@ export async function getPositionDetail(posId, userId) {
     position: pos, space,
     photo_url: photos[0]?.url || null,
     photos,
-    containers: Object.entries(grouped).map(([name, items]) => ({ name, items })),
-    loose_items: loose,
-    total_items: unique.length
+    items,
+    total_items: items.length
   };
 }
 
@@ -235,11 +258,11 @@ export async function findOrCreateItem(userId, name, description) {
 
 // ─── Item Records ───
 
-export async function createItemRecord(userId, itemId, positionId, mediaAssetId, container, note) {
+export async function createItemRecord(userId, itemId, positionId, mediaAssetId, note) {
   const id = newId();
   const rows = await query(
-    'INSERT INTO item_records (id, user_id, item_id, position_id, media_asset_id, container, note) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-    [id, userId, itemId, positionId, mediaAssetId || null, container || null, note || '']
+    'INSERT INTO item_records (id, user_id, item_id, position_id, media_asset_id, note) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+    [id, userId, itemId, positionId, mediaAssetId || null, note || '']
   );
   return rows[0];
 }
@@ -251,7 +274,7 @@ export async function searchItems(userId, queryText) {
   return query(`
     SELECT DISTINCT ON (i.id) i.name AS item_name, i.description,
       s.name || ' / ' || p.name AS location_path,
-      ir.container, ir.recorded_at, ir.media_asset_id
+      ir.recorded_at, ir.media_asset_id
     FROM item_records ir
     JOIN items i ON ir.item_id = i.id
     JOIN positions p ON ir.position_id = p.id
@@ -293,27 +316,15 @@ export async function getPositionItems(userId, positionId) {
   `, [positionId, userId]);
 
   const seen = new Set();
-  const unique = [];
+  const items = [];
   for (const r of records) {
     if (seen.has(r.item_id)) continue;
     seen.add(r.item_id);
-    unique.push({ name: r.item_name, description: r.item_description, container: r.container, note: r.note, recorded_at: r.recorded_at, media_asset_id: r.media_asset_id });
-  }
-
-  const grouped = {};
-  const loose = [];
-  for (const item of unique) {
-    if (item.container) {
-      if (!grouped[item.container]) grouped[item.container] = [];
-      grouped[item.container].push(item);
-    } else {
-      loose.push(item);
-    }
+    items.push({ name: r.item_name, description: r.item_description, note: r.note, recorded_at: r.recorded_at, media_asset_id: r.media_asset_id });
   }
 
   return {
-    containers: Object.entries(grouped).map(([name, items]) => ({ name, items })),
-    loose_items: loose,
+    items,
     latest_photo_id: records[0]?.media_asset_id || null
   };
 }
@@ -344,6 +355,8 @@ export async function initConversationTables() {
   // Add columns if table already exists
   await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'assistant'`).catch(() => {});
   await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS steps JSONB`).catch(() => {});
+  // Unique constraint on apple_user_id
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_apple_user_id_unique ON users (apple_user_id) WHERE apple_user_id IS NOT NULL`).catch(() => {});
 }
 
 export async function getOrCreateConversation(userId) {
@@ -422,14 +435,8 @@ export async function updateItem(userId, itemName, updates) {
     const space = await findOrCreateSpace(userId, updates.space_name);
     const position = await findOrCreatePosition(space.id, userId, updates.position_name);
     await query(
-      'UPDATE item_records SET position_id = $1, container = $2 WHERE item_id = $3 AND user_id = $4',
-      [position.id, updates.container || null, item.id, userId]
-    );
-  } else if (updates.container !== undefined) {
-    // Just update container within same position
-    await query(
-      'UPDATE item_records SET container = $1 WHERE item_id = $2 AND user_id = $3',
-      [updates.container || null, item.id, userId]
+      'UPDATE item_records SET position_id = $1 WHERE item_id = $2 AND user_id = $3',
+      [position.id, item.id, userId]
     );
   }
 
@@ -482,10 +489,7 @@ export async function confirmAndSave(userId, suggestion, mediaAssetId) {
       await client.query('UPDATE media_assets SET position_id = $1 WHERE id = $2', [position.id, mediaAssetId]);
     }
 
-    const allItems = [
-      ...(suggestion.containers || []).flatMap((c) => c.items.map((i) => ({ ...i, container: c.name }))),
-      ...(suggestion.loose_items || []).map((i) => ({ ...i, container: null }))
-    ];
+    const allItems = suggestion.items || [];
 
     let savedCount = 0;
     for (const input of allItems) {
@@ -511,8 +515,8 @@ export async function confirmAndSave(userId, suggestion, mediaAssetId) {
 
       const recordId = newId();
       await client.query(
-        'INSERT INTO item_records (id, user_id, item_id, position_id, media_asset_id, container, note) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-        [recordId, userId, item.id, position.id, mediaAssetId || null, input.container || null, input.note || '']
+        'INSERT INTO item_records (id, user_id, item_id, position_id, media_asset_id, note) VALUES ($1, $2, $3, $4, $5, $6)',
+        [recordId, userId, item.id, position.id, mediaAssetId || null, input.note || '']
       );
       savedCount++;
     }

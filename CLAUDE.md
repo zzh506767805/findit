@@ -111,13 +111,13 @@ Expo App → API (Container Apps) → PostgreSQL
 - get_position_items — 获取位置物品
 - view_photo — 查看历史照片（支持 Blob URL 直传 AI）
 - search_items — 搜索物品（匹配 name + description，支持颜色/品牌等特征）
-- suggest_save — 提交识别建议（需用户确认）
-- update_item — 修改物品（名称/描述/位置/容器）
+- save_items — 创建/更新空间、位置、物品（通用，需用户确认；原 suggest_save）
+- update_item — 修改物品（名称/描述/位置）
 - delete_item — 删除物品
 
 ### 数据三层结构
 
-空间(Space) → 位置(Position) → 容器(container字段) → 物品(Item)
+空间(Space) → 位置(Position) → 物品(Item)
 
 ### 用量计费
 
@@ -184,11 +184,22 @@ npx eas-cli build --profile preview --platform ios
 - [x] 空间详情（多图横滑 + 物品列表 + 去重计数）
 - [x] Web 开发模式（电脑浏览器测试，文件选择上传）
 - [x] 物品编辑/删除（update_item + delete_item 工具）
+- [x] Apple Sign In 服务端验签（Apple 公钥 JWT，生产强制/开发宽松）
+- [x] Apple IAP 真实接入（expo-in-app-purchases + 后端 receipt 验证）
+- [x] JWT_SECRET 生产环境强制设置
+- [x] add-credits 接口收紧（仅 development 模式直接加次数）
+- [x] apple_user_id 唯一约束 + INSERT ON CONFLICT
+- [x] Token 持久化（expo-secure-store，Web 用 localStorage）
+- [x] 删除未使用的 WorkspaceScreen.js
+- [x] suggest_save 改名 save_items（通用创建工具，参数全可选）
+- [x] Azure OpenAI 请求重试（ECONNRESET 等网络错误自动重试 2 次）
 
 ### 待做（上架阻断项）
 - [ ] ICP 备案提交（阿里云，需轻量服务器做备案落地）
-- [ ] Apple IAP 接入真实 API（替换开发模式模拟购买）
-- [ ] Apple Sign In identityToken 服务端验证
+- [x] Apple IAP 接入真实 API（expo-in-app-purchases + 后端 receipt 验证）
+- [x] Apple Sign In identityToken 服务端验证（Apple 公钥 JWT 验签）
+- [ ] App Store Connect 创建 IAP 产品（fangnale_yearly + fangnale_topup）
+- [ ] 设置环境变量 APPLE_IAP_SHARED_SECRET
 - [ ] App 图标 + 截图
 - [ ] 隐私政策 + 用户协议
 - [ ] EAS Build 打包 + TestFlight 测试
@@ -204,7 +215,7 @@ npx eas-cli build --profile preview --platform ios
 ## 决策记录
 
 - 不做 aliases（过度设计）
-- 容器信息存在 item_records.container 字段，不单独建表
+- 已去掉容器(container)概念，三级结构：空间→位置→物品
 - 一个 Agent 两种模式（识别/查找），不拆多 Agent
 - 配色用米白浅色方案（theme.js 统一管理），照片是唯一色彩
 - 登录方案：强制 Apple Sign In（上架要求）
@@ -215,8 +226,15 @@ npx eas-cli build --profile preview --platform ios
 - AI 读图用 Blob SAS URL 直传（不用 base64 内嵌），手写 SAS 签名不靠谱必须用 SDK
 - 视频用 ffmpeg 截帧（1FPS，最多10帧）后多帧 base64 发给 AI 识别
 - 视频限制 10 秒，前端 expo-image-picker videoMaxDuration=10
-- 物品 description 必须包含视觉特征（颜色/品牌/材质），提升模糊搜索召回
+- 物品 description 包含视觉特征（颜色/品牌/材质），提升模糊搜索召回
 - 防火墙开发阶段全开，上线前收紧
 - 对话上下文：两页共享 conversation + previousResponseId，用 source 字段分开展示
 - 物品计数用 count(DISTINCT item_id) 避免同物品多次记录重复计数
 - Web 端：expo-image-picker 只用 library 模式（无 camera），FormData 用 Blob 对象
+- Apple Sign In 验签：Apple 公钥 JWT 验证（issuer/audience/expiry/sub），缓存公钥 1 小时
+- IAP 验证：先请求生产 verifyReceipt，status 21007 自动 fallback 沙盒，按 productId 决定加次数
+- IAP 产品 ID：fangnale_yearly(500次)、fangnale_topup(120次)
+- Token 持久化：原生端 expo-secure-store，Web 端 localStorage，启动时恢复+验证
+- JWT_SECRET 生产环境必须设置（否则 process.exit），开发环境用 fallback
+- save_items 工具：所有参数可选，通用于拍照识别和手动创建空间/位置/物品
+- Azure OpenAI 请求自动重试 2 次（间隔 1s/2s），防 ECONNRESET

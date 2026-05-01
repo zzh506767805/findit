@@ -1,36 +1,71 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert,
-  Image,
+  Animated,
+  Easing,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
+  useWindowDimensions,
   View
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 
 import { requestJson } from '../api';
-import { streamAgentUpload } from '../sse';
 import { AppIcon, EmptyState } from '../ui';
 import { colors, radius } from '../theme';
-import AgentWorkflow from '../components/AgentWorkflow';
-import SuggestionCard from '../components/SuggestionCard';
 import SpaceDetailScreen from './SpaceDetailScreen';
 
-export default function SpacesScreen({ session, onDataChanged, dataVersion, onNeedCredits, onCreditsChanged }) {
+export default function SpacesScreen({ session, onDataChanged, dataVersion, onPickMedia }) {
   const [data, setData] = useState({ spaces: [], total_spaces: 0, total_items: 0 });
   const [refreshing, setRefreshing] = useState(false);
   const [selectedSpace, setSelectedSpace] = useState(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [agentSteps, setAgentSteps] = useState([]);
-  const [agentSuggestion, setAgentSuggestion] = useState(null);
-  const [agentMediaId, setAgentMediaId] = useState(null);
-  const [agentMessageId, setAgentMessageId] = useState(null);
-  const [agentPreview, setAgentPreview] = useState(null);
-  const [confirmLoading, setConfirmLoading] = useState(false);
+  const [addingSpace, setAddingSpace] = useState(false);
+  const [newSpaceName, setNewSpaceName] = useState('');
+  const posCache = useRef({});
+  const { width: screenW } = useWindowDimensions();
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const [showDetail, setShowDetail] = useState(false);
+
+  function openSpace(space) {
+    setSelectedSpace(space);
+    setShowDetail(true);
+    slideAnim.setValue(screenW);
+    Animated.timing(slideAnim, { toValue: 0, duration: 150, easing: Easing.out(Easing.cubic), useNativeDriver: true }).start();
+  }
+
+  function closeSpace() {
+    Animated.timing(slideAnim, { toValue: screenW, duration: 150, easing: Easing.in(Easing.cubic), useNativeDriver: true }).start(() => {
+      setShowDetail(false);
+      setSelectedSpace(null);
+      load();
+    });
+  }
+
+  const shouldCapture = (e, g) => {
+    const fromEdge = e.nativeEvent.pageX - g.dx;
+    return fromEdge < 60 && g.dx > 10 && Math.abs(g.dx) > Math.abs(g.dy) * 2;
+  };
+  const panResponder = useRef(PanResponder.create({
+    onStartShouldSetPanResponder: () => false,
+    onMoveShouldSetPanResponder: shouldCapture,
+    onMoveShouldSetPanResponderCapture: shouldCapture,
+    onPanResponderTerminationRequest: () => false,
+    onPanResponderGrant: () => { slideAnim.stopAnimation(); },
+    onPanResponderMove: (_, g) => { if (g.dx >= 0) slideAnim.setValue(g.dx); },
+    onPanResponderRelease: (_, g) => {
+      if (g.dx > screenW * 0.25 || g.vx > 0.4) {
+        closeSpace();
+      } else {
+        Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, overshootClamping: true }).start();
+      }
+    }
+  })).current;
 
   const load = useCallback(async () => {
     try { setData(await requestJson('/spaces', session)); } catch {}
@@ -40,122 +75,116 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onNe
 
   async function onRefresh() { setRefreshing(true); await load(); setRefreshing(false); }
 
-  async function pickAndAnalyze() {
+  async function handleAddSpace() {
+    const name = newSpaceName.trim();
+    if (!name) return;
+    const tempId = `temp_${Date.now()}`;
+    setNewSpaceName('');
+    setAddingSpace(false);
+    setData(prev => ({
+      ...prev,
+      spaces: [...prev.spaces, { id: tempId, name, item_count: 0, positions: [] }],
+      total_spaces: prev.total_spaces + 1
+    }));
+    try {
+      await requestJson('/spaces', { ...session, method: 'POST', body: { name } });
+      load();
+      onDataChanged?.();
+    } catch (err) {
+      setData(prev => ({ ...prev, spaces: prev.spaces.filter(s => s.id !== tempId), total_spaces: prev.total_spaces - 1 }));
+      Alert.alert('创建失败', err.message);
+    }
+  }
+
+  function handleSpaceLongPress(space) {
+    Alert.alert(space.name, '', [
+      { text: '重命名', onPress: () => promptRenameSpace(space) },
+      { text: '删除', style: 'destructive', onPress: () => confirmDeleteSpace(space) },
+      { text: '取消', style: 'cancel' }
+    ]);
+  }
+
+  function promptRenameSpace(space) {
+    Alert.prompt?.('重命名空间', '', async (name) => {
+      if (!name?.trim()) return;
+      const oldName = space.name;
+      setData(prev => ({ ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: name.trim() } : s) }));
+      try {
+        await requestJson(`/spaces/${space.id}`, { ...session, method: 'PUT', body: { name: name.trim() } });
+        onDataChanged?.();
+      } catch (err) {
+        setData(prev => ({ ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: oldName } : s) }));
+        Alert.alert('重命名失败', err.message);
+      }
+    }, 'plain-text', space.name);
+  }
+
+  function confirmDeleteSpace(space) {
+    Alert.alert('删除空间', `确定删除"${space.name}"及其所有位置和物品？`, [
+      { text: '取消', style: 'cancel' },
+      { text: '删除', style: 'destructive', onPress: async () => {
+        const prevData = data;
+        setData(prev => ({
+          ...prev,
+          spaces: prev.spaces.filter(s => s.id !== space.id),
+          total_spaces: prev.total_spaces - 1,
+          total_items: prev.total_items - (space.item_count || 0)
+        }));
+        try {
+          await requestJson(`/spaces/${space.id}`, { ...session, method: 'DELETE' });
+          onDataChanged?.();
+        } catch (err) {
+          setData(prevData);
+          Alert.alert('删除失败', err.message);
+        }
+      }}
+    ]);
+  }
+
+  async function pickAndSend(spaceHint) {
     if (Platform.OS === 'web') {
-      startAnalyze('library');
+      doPick('library', spaceHint);
     } else {
-      Alert.alert('拍照方式', '', [
-        { text: '相机', onPress: () => startAnalyze('camera') },
-        { text: '相册', onPress: () => startAnalyze('library') },
+      Alert.alert('记录方式', '', [
+        { text: '拍照', onPress: () => doPick('camera', spaceHint) },
+        { text: '从相册选', onPress: () => doPick('library', spaceHint) },
         { text: '取消', style: 'cancel' }
       ]);
     }
   }
 
-  async function startAnalyze(source) {
+  async function doPick(source, spaceHint) {
     const perm = source === 'camera'
       ? await ImagePicker.requestCameraPermissionsAsync()
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!perm.granted) { Alert.alert('需要权限'); return; }
 
-    const options = { mediaTypes: ['images', 'videos'], videoMaxDuration: 10, quality: 0.72 };
+    const options = {
+      mediaTypes: ['images', 'videos'],
+      videoMaxDuration: 10,
+      quality: 0.72,
+      allowsMultipleSelection: source !== 'camera'
+    };
     const result = source === 'camera'
       ? await ImagePicker.launchCameraAsync(options)
       : await ImagePicker.launchImageLibraryAsync(options);
-    if (result.canceled || !result.assets?.[0]) return;
+    if (result.canceled || !result.assets?.length) return;
 
-    const asset = result.assets[0];
-    const isVideo = asset.type === 'video' || asset.uri?.match(/\.(mp4|mov|m4v)$/i);
-    const mime = isVideo ? 'video/mp4' : (asset.mimeType || 'image/jpeg');
-    setAnalyzing(true);
-    setAgentSteps([{ type: 'thinking', text: isVideo ? '正在上传视频' : '正在上传照片' }]);
-    setAgentSuggestion(null);
-    setAgentMediaId(null);
-    setAgentMessageId(null);
-    setAgentPreview({ uri: asset.uri, type: isVideo ? 'video' : 'photo' });
-
-    try {
-      let fileData = asset.uri;
-      if (Platform.OS === 'web') {
-        const resp = await fetch(asset.uri);
-        fileData = await resp.blob();
-      }
-      await streamAgentUpload(session.apiUrl, session.token, '/agent/analyze?source=spaces',
-        fileData, mime, (e) => {
-        if (e.type === 'media') {
-          setAgentMediaId(e.media_asset_id);
-          setAgentSteps((p) => [...p, { type: 'thinking', text: '已上传，正在识别' }]);
-        }
-        else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
-          setAgentSteps((p) => [...p, e]);
-        else if (e.type === 'done' && e.suggestion) setAgentSuggestion(e.suggestion);
-        else if (e.type === 'message_saved') setAgentMessageId(e.message_id);
-        else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
-      });
-      onCreditsChanged?.();
-    } catch (err) {
-      if (err.message?.includes('已用完')) {
-        setAgentSteps([]);
-        setAgentSuggestion(null);
-        setAgentMediaId(null);
-        setAgentMessageId(null);
-        setAgentPreview(null);
-        onNeedCredits?.();
-      } else {
-        setAgentSteps((p) => [...p, { type: 'thinking', text: `识别失败：${err.message}` }]);
-        Alert.alert('识别失败', err.message);
-      }
-    }
-    finally { setAnalyzing(false); }
-  }
-
-  async function confirmSuggestion(edited) {
-    const finalSuggestion = edited || agentSuggestion;
-    if (!finalSuggestion) return;
-    setConfirmLoading(true);
-    try {
-      await requestJson('/agent/confirm', {
-        ...session, method: 'POST',
-        body: { suggestion: finalSuggestion, media_asset_id: agentMediaId, message_id: agentMessageId }
-      });
-      setAgentSteps([]); setAgentSuggestion(null); setAgentMediaId(null); setAgentMessageId(null); setAgentPreview(null);
-      await load(); onDataChanged?.();
-    } catch (err) { Alert.alert('保存失败', err.message); }
-    finally { setConfirmLoading(false); }
-  }
-
-  const showAgentPanel = analyzing || agentPreview || agentSteps.length > 0 || agentSuggestion;
-  const analysisPanel = showAgentPanel ? (
-    <View style={s.agentPanel}>
-      <Text style={s.agentLabel}>{analyzing ? 'AI 正在识别' : agentSuggestion ? '识别结果' : '识别状态'}</Text>
-      {agentPreview ? (
-        <View style={s.previewRow}>
-          {agentPreview.type === 'video' ? (
-            <View style={[s.previewThumb, s.previewVideo]}>
-              <AppIcon name="play-circle" size={18} color={colors.white} />
-            </View>
-          ) : (
-            <Image source={{ uri: agentPreview.uri }} style={s.previewThumb} />
-          )}
-          <Text style={s.previewText}>{agentPreview.type === 'video' ? '视频已添加' : '照片已添加'}</Text>
-        </View>
-      ) : null}
-      <AgentWorkflow steps={agentSteps} apiUrl={session.apiUrl} />
-      {agentSuggestion ? (
-        <SuggestionCard suggestion={agentSuggestion}
-          onConfirm={confirmSuggestion} loading={confirmLoading || analyzing} />
-      ) : null}
-    </View>
-  ) : null;
-
-  if (selectedSpace) {
-    return <SpaceDetailScreen session={session} space={selectedSpace}
-      onBack={() => { setSelectedSpace(null); load(); }} onPhoto={pickAndAnalyze}
-      analysisPanel={analysisPanel} photoBusy={analyzing} />;
+    onPickMedia({ assets: result.assets, spaceHint });
   }
 
   return (
-    <ScrollView style={s.screen} contentContainerStyle={s.body}
+    <View style={s.screen}>
+    {showDetail && selectedSpace ? (
+      <Animated.View style={[s.detailLayer, { transform: [{ translateX: slideAnim }] }]} {...panResponder.panHandlers}>
+        <SpaceDetailScreen session={session} space={selectedSpace}
+          cachedPositions={posCache.current[selectedSpace.id]}
+          onCachePositions={(pos) => { posCache.current[selectedSpace.id] = pos; }}
+          onBack={closeSpace}
+          onPickMedia={(assets) => onPickMedia({ assets, spaceHint: selectedSpace.name })} />
+      </Animated.View>
+    ) : null}
+    <ScrollView style={s.list} contentContainerStyle={s.body}
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.textDim} />}>
 
@@ -164,11 +193,10 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onNe
         <Text style={s.subtitle}>{data.total_spaces} 个空间 · {data.total_items} 件物品</Text>
       </View>
 
-      {analysisPanel}
-
       {data.spaces.length > 0 ? data.spaces.map((space) => (
         <Pressable key={space.id} style={({ pressed }) => [s.spaceCard, pressed && s.pressed]}
-          onPress={() => setSelectedSpace(space)}>
+          onPress={() => openSpace(space)}
+          onLongPress={() => handleSpaceLongPress(space)}>
           <View style={s.spaceTop}>
             <Text style={s.spaceName}>{space.name}</Text>
             <Text style={s.spaceCount}>{space.item_count}</Text>
@@ -177,42 +205,48 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onNe
             {space.positions?.join('  ·  ') || '暂无位置'}
           </Text>
         </Pressable>
-      )) : (
-        <EmptyState title="还没有空间" text="拍张照片，AI 自动识别房间和位置" icon="home" />
+      )) : !addingSpace ? (
+        <EmptyState title="还没有空间" text="点击下方添加空间，或拍照让 AI 自动识别" icon="home" />
+      ) : null}
+
+      {addingSpace ? (
+        <View style={s.addRow}>
+          <TextInput style={s.addInput} value={newSpaceName} onChangeText={setNewSpaceName}
+            placeholder="空间名称，如 客厅、卧室" placeholderTextColor={colors.textDim}
+            autoFocus returnKeyType="done" onSubmitEditing={handleAddSpace} />
+          <Pressable style={s.addConfirm} onPress={handleAddSpace}>
+            <AppIcon name="check" size={16} color={colors.white} />
+          </Pressable>
+          <Pressable style={s.addCancel} onPress={() => { setAddingSpace(false); setNewSpaceName(''); }}>
+            <AppIcon name="x" size={16} color={colors.textDim} />
+          </Pressable>
+        </View>
+      ) : (
+        <Pressable style={({ pressed }) => [s.addSpaceBtn, pressed && s.pressed]}
+          onPress={() => setAddingSpace(true)}>
+          <AppIcon name="plus" size={16} color={colors.textSecondary} />
+          <Text style={s.addSpaceBtnText}>添加空间</Text>
+        </Pressable>
       )}
 
-      <Pressable style={({ pressed }) => [s.captureBtn, pressed && s.pressed, analyzing && s.disabled]}
-        onPress={pickAndAnalyze} disabled={analyzing}>
+      <Pressable style={({ pressed }) => [s.captureBtn, pressed && s.pressed]}
+        onPress={() => pickAndSend()}>
         <AppIcon name="camera" size={18} color={colors.bg} />
-        <Text style={s.captureBtnText}>{analyzing ? '正在识别' : '拍照记录'}</Text>
+        <Text style={s.captureBtnText}>拍照记录</Text>
       </Pressable>
     </ScrollView>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
+  list: { flex: 1 },
+  detailLayer: { ...StyleSheet.absoluteFillObject, zIndex: 2, backgroundColor: colors.bg, ...(Platform.OS === 'web' ? { willChange: 'transform' } : {}) },
   body: { padding: 20, paddingBottom: 40, gap: 12 },
   header: { paddingVertical: 8 },
   title: { color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
   subtitle: { color: colors.textTertiary, fontSize: 14, marginTop: 4 },
-  agentPanel: {
-    borderRadius: radius.lg, backgroundColor: colors.bgRaised,
-    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line,
-    padding: 14, gap: 8
-  },
-  agentLabel: { color: colors.orange, fontSize: 12, fontWeight: '700' },
-  previewRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    borderRadius: radius.md, backgroundColor: colors.bgInput, padding: 8
-  },
-  previewThumb: {
-    width: 52, height: 52, borderRadius: radius.sm, backgroundColor: colors.bgCard
-  },
-  previewVideo: {
-    alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary
-  },
-  previewText: { color: colors.textSecondary, fontSize: 13, fontWeight: '700' },
   spaceCard: {
     borderRadius: radius.lg, backgroundColor: colors.bgCard,
     padding: 16, gap: 8
@@ -223,12 +257,33 @@ const s = StyleSheet.create({
   spaceName: { color: colors.text, fontSize: 20, fontWeight: '800' },
   spaceCount: { color: colors.textTertiary, fontSize: 14, fontWeight: '700' },
   spacePositions: { color: colors.textDim, fontSize: 14 },
+  addSpaceBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, minHeight: 46, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.line, borderStyle: 'dashed'
+  },
+  addSpaceBtnText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
+  addRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8
+  },
+  addInput: {
+    flex: 1, height: 44, borderRadius: radius.md,
+    backgroundColor: colors.bgCard, paddingHorizontal: 14,
+    color: colors.text, fontSize: 15
+  },
+  addConfirm: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center'
+  },
+  addCancel: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: colors.bgCard, alignItems: 'center', justifyContent: 'center'
+  },
   captureBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, minHeight: 50, borderRadius: radius.full,
     backgroundColor: colors.primary, marginTop: 4
   },
   captureBtnText: { color: colors.white, fontSize: 16, fontWeight: '700' },
-  pressed: { opacity: 0.7 },
-  disabled: { opacity: 0.35 }
+  pressed: { opacity: 0.7 }
 });

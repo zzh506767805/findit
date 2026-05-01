@@ -6,12 +6,15 @@ import { AppIcon } from '../ui';
 import { colors, radius } from '../theme';
 
 const TOOL_LABELS = {
-  list_spaces: { icon: 'globe', label: '查看已有空间' },
+  list_spaces: { icon: 'globe', label: '查看空间' },
   list_positions: { icon: 'map-pin', label: '查看位置' },
-  get_position_items: { icon: 'list', label: '查看物品记录' },
-  view_photo: { icon: 'image', label: '查看历史照片' },
+  get_position_items: { icon: 'list', label: '查看物品' },
+  view_photo: { icon: 'image', label: '查看照片' },
   search_items: { icon: 'search', label: '搜索物品' },
-  suggest_save: { icon: 'save', label: '整理识别结果' }
+  save_items: { icon: 'save', label: '整理数据' },
+  suggest_save: { icon: 'save', label: '整理数据' },
+  update_item: { icon: 'edit-2', label: '修改物品' },
+  delete_item: { icon: 'trash-2', label: '删除物品' }
 };
 
 function formatToolLabel(tool, args) {
@@ -31,12 +34,11 @@ function formatToolResult(tool, result) {
     return Array.isArray(result) && result.length ? result.map((p) => `${p.name}(${p.item_count}件)`).join('、') : '暂无位置';
   }
   if (tool === 'get_position_items') {
-    const total = (result.containers || []).reduce((n, c) => n + c.items.length, 0) + (result.loose_items || []).length;
-    return `${total} 件物品`;
+    return `${(result.items || []).length} 件物品`;
   }
   if (tool === 'search_items') return `找到 ${result.count || 0} 条记录`;
   if (tool === 'view_photo') return '已查看';
-  if (tool === 'suggest_save') return '已整理';
+  if (tool === 'save_items') return '待确认';
   return null;
 }
 
@@ -71,9 +73,10 @@ export default function AgentWorkflow({ steps = [], apiUrl }) {
         if (step.type === 'tool_result') {
           const summary = formatToolResult(step.tool, step.result);
           const photoUrl = step.result?.blob_url ? fullImageUrl(apiUrl, step.result.blob_url) : null;
+          if (!summary && !photoUrl) return null;
           return (
             <FadeIn key={i} delay={i * 60}>
-              <Text style={s.resultLine}>  → {summary}</Text>
+              {summary ? <Text style={s.resultLine}>  → {summary}</Text> : null}
               {photoUrl ? <Image source={{ uri: photoUrl }} style={s.thumb} /> : null}
             </FadeIn>
           );

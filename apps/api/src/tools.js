@@ -20,7 +20,7 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'get_position_items',
-    description: '获取某个位置已记录的所有物品，按容器分组，包含最近照片ID。',
+    description: '获取某个位置已记录的所有物品，包含最近照片ID。',
     parameters: {
       type: 'object',
       properties: { position_id: { type: 'string' } },
@@ -53,7 +53,7 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'update_item',
-    description: '修改物品信息或移动物品到新位置。可改名、改描述、移动到其他空间/位置/容器。直接执行，无需用户确认。',
+    description: '修改物品信息或移动物品到新位置。可改名、改描述、移动到其他空间/位置。直接执行，无需用户确认。',
     parameters: {
       type: 'object',
       properties: {
@@ -61,8 +61,7 @@ export const toolDefinitions = [
         new_name: { type: 'string', description: '新名称（不改则不传）' },
         description: { type: 'string', description: '新描述（不改则不传）' },
         space_name: { type: 'string', description: '目标空间名（移动时必传）' },
-        position_name: { type: 'string', description: '目标位置名（移动时必传）' },
-        container: { type: 'string', description: '目标容器名（可选）' }
+        position_name: { type: 'string', description: '目标位置名（移动时必传）' }
       },
       required: ['item_name']
     }
@@ -81,42 +80,28 @@ export const toolDefinitions = [
   },
   {
     type: 'function',
-    name: 'suggest_save',
-    description: '提交识别结果建议。不会直接保存，需要用户确认后才写入数据库。',
+    name: 'save_items',
+    description: '创建或更新空间、位置、物品。需要用户确认后才写入数据库。可用于拍照识别、手动添加空间/位置/物品等任何场景。',
     parameters: {
       type: 'object',
       properties: {
         space: {
           type: 'object',
-          properties: { name: { type: 'string' }, is_new: { type: 'boolean' } },
-          required: ['name', 'is_new']
+          properties: { name: { type: 'string' }, is_new: { type: 'boolean' } }
         },
         position: {
           type: 'object',
-          properties: { name: { type: 'string' }, is_new: { type: 'boolean' }, description: { type: 'string' } },
-          required: ['name', 'is_new']
+          properties: { name: { type: 'string' }, is_new: { type: 'boolean' }, description: { type: 'string' } }
         },
-        containers: {
+        items: {
           type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              items: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, status: { type: 'string', enum: ['existing', 'new', 'missing'] } }, required: ['name', 'status'] } }
-            },
-            required: ['name', 'items']
-          }
-        },
-        loose_items: {
-          type: 'array',
-          items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, status: { type: 'string', enum: ['existing', 'new', 'missing'] } }, required: ['name', 'status'] }
+          items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, status: { type: 'string', enum: ['existing', 'new', 'missing'] } } }
         },
         uncertain_items: {
           type: 'array',
           items: { type: 'object', properties: { description: { type: 'string' } } }
         }
-      },
-      required: ['space', 'position']
+      }
     }
   }
 ];
@@ -146,7 +131,7 @@ export async function executeTool(toolName, args, userId, uploadDir) {
       return { results, count: results.length };
     }
 
-    case 'suggest_save':
+    case 'save_items':
       return { type: 'suggestion', suggestion: args };
 
     case 'update_item':
@@ -154,8 +139,7 @@ export async function executeTool(toolName, args, userId, uploadDir) {
         new_name: args.new_name,
         description: args.description,
         space_name: args.space_name,
-        position_name: args.position_name,
-        container: args.container
+        position_name: args.position_name
       });
 
     case 'delete_item':

@@ -64,7 +64,7 @@ function serverMsgToLocal(m) {
   };
 }
 
-export default function AssistantScreen({ session, onDataChanged, credits, onNeedCredits, onCreditsChanged }) {
+export default function AssistantScreen({ session, onDataChanged, credits, onNeedCredits, onCreditsChanged, pendingMedia, onPendingMediaConsumed }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -84,6 +84,56 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
       setLoadingHistory(false);
     })();
   }, [session.token]);
+
+  // Handle pending media from Spaces page
+  useEffect(() => {
+    if (!pendingMedia || busy) return;
+    const { assets, spaceHint } = pendingMedia;
+    onPendingMediaConsumed?.();
+    if (assets?.length) sendMediaAssets(assets, spaceHint);
+  }, [pendingMedia]);
+
+  async function sendMediaAssets(assets, spaceHint) {
+    setBusy(true);
+    for (let ai = 0; ai < assets.length; ai++) {
+      const asset = assets[ai];
+      const isVideo = asset.type === 'video' || asset.uri?.match(/\.(mp4|mov|m4v)$/i);
+      const msgType = isVideo ? 'video' : 'photo';
+      const mime = isVideo ? 'video/mp4' : (asset.mimeType || 'image/jpeg');
+      const source = spaceHint ? `spaces&space_hint=${encodeURIComponent(spaceHint)}` : 'spaces';
+
+      addMsg({ role: 'user', type: msgType, uri: asset.uri });
+      addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, mediaAssetId: null });
+
+      const handleEvent = (e) => {
+        if (e.type === 'media') patchLastAgent((m) => ({ ...m, mediaAssetId: e.media_asset_id }));
+        else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
+          patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
+        else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
+        else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
+        else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
+        else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
+      };
+
+      try {
+        let fileData = asset.uri;
+        if (Platform.OS === 'web') {
+          const resp = await fetch(asset.uri);
+          fileData = await resp.blob();
+        }
+        await streamAgentUpload(session.apiUrl, session.token, `/agent/analyze?source=${source}`, fileData, mime, handleEvent);
+        onCreditsChanged?.();
+      } catch (err) {
+        if (err.message?.includes('已用完')) {
+          onNeedCredits?.();
+          break;
+        } else {
+          patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
+        }
+      }
+    }
+    setBusy(false);
+  }
 
   async function startNewConversation() {
     try {
@@ -123,47 +173,14 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
       : mediaType === 'image'
         ? { mediaTypes: ['images'], quality: 0.72 }
         : { mediaTypes: ['images', 'videos'], videoMaxDuration: 10, quality: 0.72 };
+    if (source !== 'camera') options.allowsMultipleSelection = true;
 
     const result = source === 'camera'
       ? await ImagePicker.launchCameraAsync(options)
       : await ImagePicker.launchImageLibraryAsync(options);
-    if (result.canceled || !result.assets?.[0]) return;
+    if (result.canceled || !result.assets?.length) return;
 
-    const asset = result.assets[0];
-    const isVideo = asset.type === 'video' || asset.uri?.match(/\.(mp4|mov|m4v)$/i);
-    const msgType = isVideo ? 'video' : 'photo';
-    const mime = isVideo ? 'video/mp4' : (asset.mimeType || 'image/jpeg');
-
-    addMsg({ role: 'user', type: msgType, uri: asset.uri });
-    addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, mediaAssetId: null });
-    setBusy(true);
-
-    const handleEvent = (e) => {
-      if (e.type === 'media') patchLastAgent((m) => ({ ...m, mediaAssetId: e.media_asset_id }));
-      else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
-        patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
-      else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
-      else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
-      else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
-      else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
-    };
-
-    try {
-      let fileData = asset.uri;
-      if (Platform.OS === 'web') {
-        const resp = await fetch(asset.uri);
-        fileData = await resp.blob();
-      }
-      await streamAgentUpload(session.apiUrl, session.token, '/agent/analyze', fileData, mime, handleEvent);
-      onCreditsChanged?.();
-    } catch (err) {
-      if (err.message?.includes('已用完')) {
-        onNeedCredits?.();
-        setMessages((p) => p.slice(0, -1));
-      } else {
-        patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
-      }
-    } finally { setBusy(false); }
+    await sendMediaAssets(result.assets);
   }
 
   async function sendQuery() {
@@ -336,7 +353,7 @@ const s = StyleSheet.create({
   },
   videoBadgeText: { color: colors.white, fontSize: 11, fontWeight: '700' },
   userBubble: { maxWidth: '78%', backgroundColor: colors.bgInput, borderRadius: radius.lg, borderBottomRightRadius: radius.xs, paddingHorizontal: 16, paddingVertical: 10 },
-  userText: { color: colors.text, fontSize: 15, fontWeight: '600', lineHeight: 21 },
+  userText: { color: colors.text, fontSize: 15, fontWeight: '400', lineHeight: 21 },
   agentRow: { gap: 8 },
   agentLoading: {
     backgroundColor: colors.bgInput, borderRadius: radius.lg, borderBottomLeftRadius: radius.xs,

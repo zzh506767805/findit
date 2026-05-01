@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual, createPublicKey } from 'node:crypto';
 import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -11,7 +11,9 @@ const execFileAsync = promisify(execFile);
 import { runAgent, getAzureConfigStatus } from './agent.js';
 import {
   getOrCreateDemoUser, getOrCreateAppleUser, requireUser, newId, nowIso,
-  listSpaces, listPositions, getPositionDetail,
+  listSpaces, createSpace, updateSpace, deleteSpace,
+  listPositions, createPosition, updatePosition, deletePosition,
+  getPositionDetail,
   createMediaAsset,
   getUserCredits, consumeCredit, refundCredit, addCredits,
   confirmAndSave,
@@ -52,11 +54,19 @@ function corsHeaders() {
 
 // ─── Auth Token (HMAC-SHA256) ───
 
-const JWT_SECRET = process.env.JWT_SECRET || 'findit-dev-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  if (process.env.NODE_ENV === 'production') {
+    console.error('FATAL: JWT_SECRET must be set in production');
+    process.exit(1);
+  }
+  console.warn('WARNING: JWT_SECRET not set, using dev fallback (DO NOT use in production)');
+}
+const JWT_SECRET_KEY = JWT_SECRET || 'findit-dev-secret-change-in-production';
 
 function signToken(userId) {
   const payload = Buffer.from(JSON.stringify({ sub: userId, iat: Date.now() })).toString('base64url');
-  const sig = createHmac('sha256', JWT_SECRET).update(payload).digest('base64url');
+  const sig = createHmac('sha256', JWT_SECRET_KEY).update(payload).digest('base64url');
   return `${payload}.${sig}`;
 }
 
@@ -66,7 +76,7 @@ function verifyToken(token) {
   const parts = (token || '').split('.');
   if (parts.length !== 2) return null;
   const [payload, sig] = parts;
-  const expected = createHmac('sha256', JWT_SECRET).update(payload).digest('base64url');
+  const expected = createHmac('sha256', JWT_SECRET_KEY).update(payload).digest('base64url');
   const sigBuf = Buffer.from(sig);
   const expectedBuf = Buffer.from(expected);
   if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) return null;
@@ -75,6 +85,92 @@ function verifyToken(token) {
     if (Date.now() - data.iat > TOKEN_MAX_AGE_MS) return null;
     return data.sub;
   } catch { return null; }
+}
+
+// ─── Apple Sign In Token Verification ───
+
+const APPLE_KEYS_URL = 'https://appleid.apple.com/auth/keys';
+const APPLE_ISSUER = 'https://appleid.apple.com';
+const APPLE_BUNDLE_ID = 'top.fangnale';
+let appleKeysCache = null;
+let appleKeysCacheTime = 0;
+
+async function getApplePublicKeys() {
+  if (appleKeysCache && Date.now() - appleKeysCacheTime < 3600_000) return appleKeysCache;
+  const res = await fetch(APPLE_KEYS_URL);
+  if (!res.ok) throw new Error('Failed to fetch Apple public keys');
+  const { keys } = await res.json();
+  appleKeysCache = keys;
+  appleKeysCacheTime = Date.now();
+  return keys;
+}
+
+function base64urlDecode(str) {
+  return Buffer.from(str, 'base64url');
+}
+
+async function verifyAppleIdentityToken(identityToken) {
+  const parts = identityToken.split('.');
+  if (parts.length !== 3) throw new Error('Invalid token format');
+  const header = JSON.parse(base64urlDecode(parts[0]).toString());
+  const payload = JSON.parse(base64urlDecode(parts[1]).toString());
+
+  // Find matching key
+  const keys = await getApplePublicKeys();
+  const key = keys.find(k => k.kid === header.kid);
+  if (!key) throw new Error('Apple key not found');
+
+  // Build public key and verify signature
+  const publicKey = createPublicKey({ key, format: 'jwk' });
+  const { createVerify } = await import('node:crypto');
+  const verifier = createVerify('RSA-SHA256');
+  verifier.update(`${parts[0]}.${parts[1]}`);
+  const valid = verifier.verify(publicKey, parts[2], 'base64url');
+  if (!valid) throw new Error('Invalid signature');
+
+  // Verify claims
+  if (payload.iss !== APPLE_ISSUER) throw new Error('Invalid issuer');
+  if (payload.aud !== APPLE_BUNDLE_ID) throw new Error('Invalid audience');
+  if (payload.exp * 1000 < Date.now()) throw new Error('Token expired');
+
+  return payload; // { sub, email, ... }
+}
+
+// ─── Apple IAP Receipt Verification ───
+
+const APPLE_VERIFY_URL = 'https://buy.itunes.apple.com/verifyReceipt';
+const APPLE_SANDBOX_VERIFY_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
+const IAP_SHARED_SECRET = process.env.APPLE_IAP_SHARED_SECRET || '';
+
+const PRODUCT_CREDITS = {
+  fangnale_yearly: 500,
+  fangnale_topup: 120
+};
+
+async function verifyAppleReceipt(receiptData) {
+  const body = JSON.stringify({ 'receipt-data': receiptData, password: IAP_SHARED_SECRET });
+
+  let res = await fetch(APPLE_VERIFY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  let result = await res.json();
+
+  // Status 21007 means it's a sandbox receipt
+  if (result.status === 21007) {
+    res = await fetch(APPLE_SANDBOX_VERIFY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    result = await res.json();
+  }
+
+  if (result.status !== 0) throw new Error(`Receipt verification failed: status ${result.status}`);
+
+  // Get the latest transaction
+  const latestReceipt = result.latest_receipt_info || result.receipt?.in_app || [];
+  const latest = Array.isArray(latestReceipt) ? latestReceipt[latestReceipt.length - 1] : null;
+  if (!latest) throw new Error('No purchase found in receipt');
+
+  return {
+    productId: latest.product_id,
+    transactionId: latest.transaction_id,
+    originalTransactionId: latest.original_transaction_id
+  };
 }
 
 function addSasToUrls(data) {
@@ -272,7 +368,24 @@ async function route(req, res) {
     const body = await readJson(req);
     const { appleUserId, email, fullName, identityToken } = body;
     if (!appleUserId) return sendJson(res, 400, { error: 'appleUserId is required' });
-    // TODO: 正式上线前验证 identityToken 签名
+
+    // 验证 identityToken（生产环境强制，开发环境可跳过）
+    if (identityToken) {
+      try {
+        const applePayload = await verifyAppleIdentityToken(identityToken);
+        if (applePayload.sub !== appleUserId) {
+          return sendJson(res, 401, { error: 'Token subject mismatch' });
+        }
+      } catch (err) {
+        if (process.env.NODE_ENV === 'production') {
+          return sendJson(res, 401, { error: `Apple token verification failed: ${err.message}` });
+        }
+        console.warn('[auth] Apple token verification skipped in dev:', err.message);
+      }
+    } else if (process.env.NODE_ENV === 'production') {
+      return sendJson(res, 400, { error: 'identityToken is required' });
+    }
+
     const name = fullName || (email ? email.split('@')[0] : 'User');
     const user = await getOrCreateAppleUser(appleUserId, email, name);
     const credits = await getUserCredits(user.id);
@@ -287,13 +400,29 @@ async function route(req, res) {
   }
 
   if (method === 'POST' && url.pathname === '/user/add-credits') {
-    if (process.env.NODE_ENV === 'production') {
-      return sendJson(res, 403, { error: 'IAP receipt validation required' });
-    }
     const body = await readJson(req);
-    await addCredits(user.id, body.amount || 0);
-    const credits = await getUserCredits(user.id);
-    return sendJson(res, 200, credits);
+
+    // 开发模式：直接加次数
+    if (process.env.NODE_ENV === 'development' && body.amount) {
+      await addCredits(user.id, body.amount);
+      const credits = await getUserCredits(user.id);
+      return sendJson(res, 200, credits);
+    }
+
+    // 生产模式：验证 Apple receipt
+    if (!body.receiptData) return sendJson(res, 400, { error: 'receiptData is required' });
+    try {
+      const { productId, transactionId } = await verifyAppleReceipt(body.receiptData);
+      const creditsToAdd = PRODUCT_CREDITS[productId];
+      if (!creditsToAdd) return sendJson(res, 400, { error: `Unknown product: ${productId}` });
+      await addCredits(user.id, creditsToAdd);
+      const credits = await getUserCredits(user.id);
+      console.log(`[iap] user=${user.id} product=${productId} tx=${transactionId} credits=+${creditsToAdd}`);
+      return sendJson(res, 200, { ...credits, productId, transactionId });
+    } catch (err) {
+      console.error('[iap] verification failed:', err.message);
+      return sendJson(res, 403, { error: err.message });
+    }
   }
 
   // ─── Conversation ───
@@ -318,10 +447,55 @@ async function route(req, res) {
     return sendJson(res, 200, { spaces, total_spaces: spaces.length, total_items: totalItems });
   }
 
+  if (method === 'POST' && url.pathname === '/spaces') {
+    const body = await readJson(req);
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '空间名称不能为空' });
+    const space = await createSpace(user.id, body.name.trim());
+    return sendJson(res, 200, space);
+  }
+
+  if (method === 'PUT' && /^\/spaces\/[^/]+$/.test(url.pathname)) {
+    const spaceId = url.pathname.split('/')[2];
+    const body = await readJson(req);
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '空间名称不能为空' });
+    const space = await updateSpace(user.id, spaceId, body.name.trim());
+    if (!space) return sendJson(res, 404, { error: 'Space not found' });
+    return sendJson(res, 200, space);
+  }
+
+  if (method === 'DELETE' && /^\/spaces\/[^/]+$/.test(url.pathname)) {
+    const spaceId = url.pathname.split('/')[2];
+    await deleteSpace(user.id, spaceId);
+    return sendJson(res, 200, { success: true });
+  }
+
   if (method === 'GET' && /^\/spaces\/[^/]+\/positions$/.test(url.pathname)) {
     const spaceId = url.pathname.split('/')[2];
     const positions = await listPositions(spaceId, user.id);
     return sendJson(res, 200, { positions });
+  }
+
+  if (method === 'POST' && /^\/spaces\/[^/]+\/positions$/.test(url.pathname)) {
+    const spaceId = url.pathname.split('/')[2];
+    const body = await readJson(req);
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '位置名称不能为空' });
+    const position = await createPosition(spaceId, user.id, body.name.trim());
+    return sendJson(res, 200, position);
+  }
+
+  if (method === 'PUT' && /^\/positions\/[^/]+$/.test(url.pathname)) {
+    const posId = url.pathname.split('/')[2];
+    const body = await readJson(req);
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '位置名称不能为空' });
+    const pos = await updatePosition(user.id, posId, body.name.trim());
+    if (!pos) return sendJson(res, 404, { error: 'Position not found' });
+    return sendJson(res, 200, pos);
+  }
+
+  if (method === 'DELETE' && /^\/positions\/[^/]+$/.test(url.pathname)) {
+    const posId = url.pathname.split('/')[2];
+    await deletePosition(user.id, posId);
+    return sendJson(res, 200, { success: true });
   }
 
   if (method === 'GET' && /^\/positions\/[^/]+\/detail$/.test(url.pathname)) {
@@ -368,6 +542,7 @@ async function route(req, res) {
     }
 
     const source = url.searchParams.get('source') || 'assistant';
+    const spaceHint = url.searchParams.get('space_hint') || '';
 
     const creditType = await consumeCredit(user.id);
     await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, saved.contentType || mimeType);
@@ -403,6 +578,7 @@ async function route(req, res) {
         userId: user.id,
         uploadDir: UPLOAD_DIR,
         previousResponseId: conv.last_response_id,
+        spaceHint,
         onEvent: (event) => {
           sendSse(res, event.type, event);
           if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);

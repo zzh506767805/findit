@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import * as InAppPurchases from 'expo-in-app-purchases';
+import { requestJson } from '../api';
 import { colors, radius } from '../theme';
 
 const PRODUCTS = [
@@ -8,25 +10,124 @@ const PRODUCTS = [
   { id: 'fangnale_topup', label: '补充包', price: '¥18', credits: 120, desc: '120 次识别' }
 ];
 
-export default function PaywallScreen({ credits, onPurchase, onRestore, onClose }) {
+export default function PaywallScreen({ credits, apiUrl, token, onPurchase, onRestore, onClose }) {
   const [loading, setLoading] = useState(false);
+  const [storeProducts, setStoreProducts] = useState(null);
+  const [connected, setConnected] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' || __DEV__) return;
+
+    let mounted = true;
+    (async () => {
+      try {
+        await InAppPurchases.connectAsync();
+        if (!mounted) return;
+        setConnected(true);
+
+        InAppPurchases.setPurchaseListener(({ responseCode, results }) => {
+          if (responseCode === InAppPurchases.IAPResponseCode.OK && results) {
+            for (const purchase of results) {
+              handleReceiptValidation(purchase);
+            }
+          }
+        });
+
+        const { results } = await InAppPurchases.getProductsAsync(PRODUCTS.map(p => p.id));
+        if (mounted && results?.length) {
+          setStoreProducts(results);
+        }
+      } catch (err) {
+        console.warn('[iap] connect error:', err.message);
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      InAppPurchases.disconnectAsync().catch(() => {});
+    };
+  }, []);
+
+  async function handleReceiptValidation(purchase) {
+    try {
+      const receiptData = Platform.OS === 'ios' ? purchase.transactionReceipt : null;
+      if (!receiptData) return;
+
+      const result = await requestJson('/user/add-credits', {
+        apiUrl, token,
+        method: 'POST',
+        body: { receiptData }
+      });
+
+      await InAppPurchases.finishTransactionAsync(purchase, false);
+      onPurchase?.(result.total);
+      Alert.alert('购买成功', `已添加识别次数`);
+    } catch (err) {
+      Alert.alert('验证失败', err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function handlePurchase(product) {
     setLoading(true);
     try {
-      // TODO: 接入真实 IAP
-      // 开发阶段模拟购买
       if (__DEV__) {
-        await onPurchase?.(product.credits);
+        // 开发模式模拟购买
+        await requestJson('/user/add-credits', {
+          apiUrl, token,
+          method: 'POST',
+          body: { amount: product.credits }
+        });
+        onPurchase?.(product.credits);
         Alert.alert('购买成功', `已添加 ${product.credits} 次识别`);
+        setLoading(false);
+        return;
+      }
+
+      if (!connected) {
+        Alert.alert('商店未连接', '请稍后再试');
+        setLoading(false);
+        return;
+      }
+
+      await InAppPurchases.purchaseItemAsync(product.id);
+      // Result will come through the purchase listener
+    } catch (err) {
+      setLoading(false);
+      Alert.alert('购买失败', err.message);
+    }
+  }
+
+  async function handleRestore() {
+    setLoading(true);
+    try {
+      if (__DEV__) {
+        onRestore?.();
+        setLoading(false);
+        return;
+      }
+      const { results } = await InAppPurchases.getPurchaseHistoryAsync();
+      if (results?.length) {
+        for (const purchase of results) {
+          await handleReceiptValidation(purchase);
+        }
       } else {
-        Alert.alert('暂未开放', '内购功能即将上线');
+        Alert.alert('无可恢复的购买');
       }
     } catch (err) {
-      Alert.alert('购买失败', err.message);
+      Alert.alert('恢复失败', err.message);
     } finally {
       setLoading(false);
     }
+  }
+
+  function getDisplayPrice(product) {
+    if (storeProducts) {
+      const sp = storeProducts.find(s => s.productId === product.id);
+      if (sp) return sp.price;
+    }
+    return product.price;
   }
 
   return (
@@ -51,13 +152,13 @@ export default function PaywallScreen({ credits, onPurchase, onRestore, onClose 
             onPress={() => handlePurchase(p)} disabled={loading}>
             {p.primary ? <Text style={s.productBadge}>推荐</Text> : null}
             <Text style={[s.productLabel, p.primary && s.productLabelPrimary]}>{p.label}</Text>
-            <Text style={[s.productPrice, p.primary && s.productPricePrimary]}>{p.price}</Text>
+            <Text style={[s.productPrice, p.primary && s.productPricePrimary]}>{getDisplayPrice(p)}</Text>
             <Text style={s.productDesc}>{p.desc}</Text>
           </Pressable>
         ))}
       </View>
 
-      <Pressable style={s.restoreBtn} onPress={onRestore}>
+      <Pressable style={s.restoreBtn} onPress={handleRestore} disabled={loading}>
         <Text style={s.restoreText}>恢复购买</Text>
       </Pressable>
     </View>

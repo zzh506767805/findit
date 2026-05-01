@@ -13,9 +13,30 @@ import {
   View,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import * as SecureStore from 'expo-secure-store';
 
 import { getDefaultApiUrl, requestJson } from './src/api';
 import { colors, radius } from './src/theme';
+
+const isWeb = Platform.OS === 'web';
+
+async function saveSession(token, user) {
+  const data = JSON.stringify({ token, user });
+  if (isWeb) { try { localStorage.setItem('findit_session', data); } catch {} }
+  else { await SecureStore.setItemAsync('findit_session', data); }
+}
+
+async function loadSession() {
+  try {
+    const raw = isWeb ? localStorage.getItem('findit_session') : await SecureStore.getItemAsync('findit_session');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+async function clearSession() {
+  if (isWeb) { try { localStorage.removeItem('findit_session'); } catch {} }
+  else { await SecureStore.deleteItemAsync('findit_session'); }
+}
 import AssistantScreen from './src/screens/AssistantScreen';
 import SpacesScreen from './src/screens/SpacesScreen';
 import LoginScreen from './src/screens/LoginScreen';
@@ -40,10 +61,30 @@ export default function App() {
   const [token, setToken] = useState(null);
   const [user, setUser] = useState(null);
   const [credits, setCredits] = useState(null);
+  const [restoring, setRestoring] = useState(true);
   const [showPaywall, setShowPaywall] = useState(false);
   const [tab, setTab] = useState('assistant');
   const [error, setError] = useState('');
   const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    loadSession().then(async (session) => {
+      if (session?.token && session?.user) {
+        setToken(session.token);
+        setUser(session.user);
+        try {
+          const c = await requestJson('/user/credits', { apiUrl, token: session.token });
+          setCredits(c);
+        } catch {
+          // Token invalid/expired, clear and show login
+          await clearSession();
+          setToken(null);
+          setUser(null);
+        }
+      }
+      setRestoring(false);
+    });
+  }, []);
 
   // Tab slider
   const sliderX = progress.interpolate({
@@ -90,11 +131,13 @@ export default function App() {
   const [dataVersion, setDataVersion] = useState(0);
   const handleDataChanged = useCallback(() => setDataVersion((v) => v + 1), []);
   const session = useMemo(() => ({ apiUrl, token }), [apiUrl, token]);
+  const [pendingMedia, setPendingMedia] = useState(null);
 
   function handleLogin(data) {
     setToken(data.token);
     setUser(data.user);
     setCredits(data.credits);
+    saveSession(data.token, data.user);
   }
 
   async function refreshCredits() {
@@ -125,6 +168,15 @@ export default function App() {
     }).start();
   }
 
+  if (restoring) {
+    return (
+      <SafeAreaView style={[s.safe, { alignItems: 'center', justifyContent: 'center' }]}>
+        <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
+        <Text style={s.logo}>FindIt</Text>
+      </SafeAreaView>
+    );
+  }
+
   if (!token) {
     return (
       <SafeAreaView style={s.safe}>
@@ -140,8 +192,10 @@ export default function App() {
         <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
         <PaywallScreen
           credits={credits}
-          onPurchase={handlePurchase}
-          onRestore={() => Alert.alert('恢复购买', '开发中')}
+          apiUrl={apiUrl}
+          token={token}
+          onPurchase={(total) => { setCredits(c => ({ ...c, total: total || c?.total })); setShowPaywall(false); }}
+          onRestore={() => {}}
           onClose={() => setShowPaywall(false)}
         />
       </SafeAreaView>
@@ -206,7 +260,7 @@ export default function App() {
               }
             ]}
           >
-            <AssistantScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} onDataChanged={handleDataChanged} />
+            <AssistantScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} onDataChanged={handleDataChanged} pendingMedia={pendingMedia} onPendingMediaConsumed={() => setPendingMedia(null)} />
           </Animated.View>
           <Animated.View
             pointerEvents={tab === 'spaces' ? 'auto' : 'none'}
@@ -219,7 +273,7 @@ export default function App() {
               }
             ]}
           >
-            <SpacesScreen session={session} credits={credits} onNeedCredits={() => setShowPaywall(true)} onCreditsChanged={refreshCredits} dataVersion={dataVersion} />
+            <SpacesScreen session={session} onDataChanged={handleDataChanged} dataVersion={dataVersion} onPickMedia={(media) => { setPendingMedia(media); switchTab('assistant'); }} />
           </Animated.View>
         </View>
       </KeyboardAvoidingView>

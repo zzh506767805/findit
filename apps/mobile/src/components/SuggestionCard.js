@@ -49,8 +49,8 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
   if (!suggestion) return null;
 
   const data = editing && draft ? draft : suggestion;
-  const { space, position, containers = [], loose_items = [], uncertain_items = [] } = data;
-  const total = containers.reduce((n, c) => n + c.items.length, 0) + loose_items.length;
+  const { space, position, items = [], uncertain_items = [] } = data;
+  const total = items.length;
 
   function startEdit() {
     setDraft(JSON.parse(JSON.stringify(suggestion)));
@@ -66,25 +66,17 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
     setDraft((prev) => { const next = JSON.parse(JSON.stringify(prev)); fn(next); return next; });
   }
 
-  function updateContainerItem(ci, ii, newItem) {
-    updateDraft((d) => { d.containers[ci].items[ii] = newItem; });
+  function updateItem(i, newItem) {
+    updateDraft((d) => { d.items[i] = newItem; });
   }
 
-  function deleteContainerItem(ci, ii) {
-    updateDraft((d) => { d.containers[ci].items.splice(ii, 1); });
-  }
-
-  function updateLooseItem(i, newItem) {
-    updateDraft((d) => { d.loose_items[i] = newItem; });
-  }
-
-  function deleteLooseItem(i) {
-    updateDraft((d) => { d.loose_items.splice(i, 1); });
+  function deleteItemAt(i) {
+    updateDraft((d) => { d.items.splice(i, 1); });
   }
 
   function addItem() {
     updateDraft((d) => {
-      d.loose_items.push({ name: '', description: '', status: 'new' });
+      d.items.push({ name: '', description: '', status: 'new' });
     });
   }
 
@@ -113,35 +105,12 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
         )}
       </View>
 
-      {containers.map((c, ci) => (
-        <View key={ci} style={s.group}>
-          <View style={s.groupHeader}>
-            <AppIcon name="box" size={12} color={colors.textTertiary} />
-            {editing ? (
-              <TextInput style={s.groupInput} value={c.name}
-                onChangeText={(v) => updateDraft((d) => { d.containers[ci].name = v; })}
-                placeholder="容器名" placeholderTextColor={colors.textDim} />
-            ) : (
-              <Text style={s.groupName}>{c.name}</Text>
-            )}
-          </View>
-          {c.items.map((item, ii) => editing ? (
-            <ItemRowEdit key={ii} item={item}
-              onChange={(v) => updateContainerItem(ci, ii, v)}
-              onDelete={() => deleteContainerItem(ci, ii)} />
-          ) : (
-            <ItemRowDisplay key={ii} item={item} />
-          ))}
-        </View>
-      ))}
-
-      {(loose_items.length > 0 || editing) ? (
+      {(items.length > 0 || editing) ? (
         <View style={s.group}>
-          <Text style={s.groupLabel}>散放</Text>
-          {loose_items.map((item, i) => editing ? (
+          {items.map((item, i) => editing ? (
             <ItemRowEdit key={i} item={item}
-              onChange={(v) => updateLooseItem(i, v)}
-              onDelete={() => deleteLooseItem(i)} />
+              onChange={(v) => updateItem(i, v)}
+              onDelete={() => deleteItemAt(i)} />
           ) : (
             <ItemRowDisplay key={i} item={item} />
           ))}
@@ -229,33 +198,6 @@ const s = StyleSheet.create({
     paddingHorizontal: 14,
     paddingTop: 10,
     gap: 4
-  },
-  groupHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    marginBottom: 4
-  },
-  groupName: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  groupInput: {
-    flex: 1,
-    height: 30,
-    borderRadius: radius.xs,
-    backgroundColor: colors.bgInput,
-    paddingHorizontal: 8,
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '700'
-  },
-  groupLabel: {
-    color: colors.textDim,
-    fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 4
   },
   itemRow: {
     flexDirection: 'row',
