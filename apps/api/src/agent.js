@@ -10,36 +10,32 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_API_VERSION = '2025-04-01-preview';
 
-const SYSTEM_PROMPT = `你是 FindIt 家庭记忆助手。你管理用户家中物品的位置记录。
+const SYSTEM_PROMPT = `你是 FindIt 家庭记忆助手，帮用户记录和查找家中物品。
 
-你有两种工作模式：
+## 能力
+你可以用工具查询数据库、查看历史照片、提交识别建议。尽量并行调用多个工具以提高效率。
 
-【识别模式】当用户发来照片时：
-1. 先用 list_spaces 和 list_positions 了解用户家的已有结构。
-2. 判断照片属于哪个空间和位置。如果是已有位置，用已有名称。
-3. 如果该位置有历史照片，用 view_photo 查看旧照片，对比变化。
-4. 识别照片中的物品，按容器分组。
-5. 标注每个物品的状态：existing（已有）、new（新增）、missing（上次有但现在没看到）。
-6. 调用 suggest_save 提交建议，等待用户确认。
+## 识别照片
+收到照片时：
+- 用 list_spaces（如果需要了解已有结构）判断空间和位置，已有位置用已有名称
+- 识别物品，按容器分组，标注状态：existing / new / missing
+- 如果该位置有历史照片且有必要对比，用 view_photo 查看
+- 最后调用 suggest_save 提交建议
 
-【查找模式】当用户问"XX在哪"时：
-1. 用 search_items 搜索物品记录。
-2. 如果需要确认，用 view_photo 查看证据照片。
-3. 用自然中文回答，包含完整位置路径和记录时间。
-4. 如果能在照片中指出物品具体位置，描述出来。
+物品命名：用用户日后会搜的词，能辨认品牌就用品牌名。容器本身不记录为物品。
+description 必须包含视觉特征（颜色、品牌、材质、形状等），这是模糊搜索的关键。
 
-识别规则：
-- 物品名称用用户日后会搜的词，不用视觉描述词。
-- 如果能辨认品牌/型号，优先用品牌名。
-- 容器本身不作为物品记录，但作为物品的归属信息。
-- 看不清的物品不要猜，放到 uncertain_items 里。
-- 不要编造数据库里没有的信息。
-- description 必须包含视觉特征：颜色、品牌、材质、形状、大小、文字/logo。这些特征是用户日后模糊搜索的关键。例如"绿色, Nike, 棉质, 圆领, 胸前有白色logo"。
+## 查找物品
+用户问"XX在哪"时：
+- 用 search_items 搜索，可以同时搜多个关键词（并行调用）
+- 模糊搜索策略：先搜最关键的词，搜不到就换同义词/拆词再搜
+- 如需确认，用 view_photo 看证据照片
+- 用自然中文回答，包含位置路径和时间
 
-查找规则：
-- 用户可能用模糊描述搜索，如"绿色的衣服""那个耐克的"。
-- 先用最关键的词搜索。如果结果不够，拆分关键词多次搜索。例如"绿色耐克鞋"→ 先搜"鞋"，再从结果的description里找"绿色"和"耐克"。
-- search_items 会同时搜索物品名称和描述，善用颜色、品牌等特征词。`;
+## 注意
+- 不要编造数据库里没有的信息
+- 看不清的物品放 uncertain_items，不要猜
+- search_items 同时匹配名称和描述`;
 
 function hasAzureConfig() {
   return Boolean(
@@ -153,7 +149,7 @@ function buildImageUrl(url) {
   return { type: 'input_image', image_url: url };
 }
 
-export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames, mimeType, userId, uploadDir, onEvent }) {
+export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames, mimeType, userId, uploadDir, onEvent, previousResponseId }) {
   if (!hasAzureConfig()) {
     return runMockAgent({ mode, query, imageBase64, userId, onEvent });
   }
@@ -193,15 +189,19 @@ export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames,
   let suggestion = null;
   const MAX_ROUNDS = 8;
 
-  let prevResponseId = null;
+  let prevResponseId = previousResponseId || null;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    const roundStart = Date.now();
     const payload = await callResponsesApi(input, tools, prevResponseId);
+    console.log(`[agent] round ${round}: API call ${Date.now() - roundStart}ms`);
     prevResponseId = payload.id || null;
     const { toolCalls, text } = extractOutputs(payload);
 
+    // Emit intermediate text even when there are tool calls
+    if (text) emit({ type: 'answer', text });
+
     if (toolCalls.length === 0) {
-      if (text) emit({ type: 'answer', text });
       break;
     }
 
@@ -260,7 +260,7 @@ export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames,
   }
 
   emit({ type: 'done', suggestion });
-  return { suggestion };
+  return { suggestion, responseId: prevResponseId };
 }
 
 async function runMockAgent({ mode, query, imageBase64, userId, onEvent }) {

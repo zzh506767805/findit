@@ -51,11 +51,43 @@ function TypingDots() {
   );
 }
 
+function serverMsgToLocal(m) {
+  if (m.role === 'user') {
+    if (m.type === 'text') return { role: 'user', type: 'text', text: m.content };
+    return { role: 'user', type: m.type, uri: m.blob_url };
+  }
+  return {
+    role: 'agent', steps: [], answer: m.content,
+    suggestion: m.suggestion, mediaAssetId: m.media_asset_id,
+    messageId: m.id, confirmed: m.confirmed
+  };
+}
+
 export default function AssistantScreen({ session, onDataChanged, credits, onNeedCredits, onCreditsChanged }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const scrollRef = useRef(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await requestJson('/conversation', session);
+        if (data.messages?.length) {
+          setMessages(data.messages.map(serverMsgToLocal));
+        }
+      } catch {}
+      setLoadingHistory(false);
+    })();
+  }, [session.token]);
+
+  async function startNewConversation() {
+    try {
+      await requestJson('/conversation/new', { ...session, method: 'POST' });
+      setMessages([]);
+    } catch {}
+  }
 
   function scrollEnd() {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
@@ -109,6 +141,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
         patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
       else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
       else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
+      else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
     };
 
     try {
@@ -137,6 +170,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
         if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
           patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
         else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
+        else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
       });
     } catch (err) {
       patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
@@ -151,7 +185,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
     try {
       await requestJson('/agent/confirm', {
         ...session, method: 'POST',
-        body: { suggestion: finalSuggestion, media_asset_id: msg.mediaAssetId }
+        body: { suggestion: finalSuggestion, media_asset_id: msg.mediaAssetId, message_id: msg.messageId }
       });
       setMessages((prev) => {
         const c = [...prev]; c[idx] = { ...c[idx], confirmed: true }; return c;
@@ -166,7 +200,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
       <ScrollView ref={scrollRef} style={s.scroll} contentContainerStyle={s.scrollBody}
         keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
 
-        {messages.length === 0 ? (
+        {messages.length === 0 && !loadingHistory ? (
           <View style={s.hero}>
             <Text style={s.heroTitle}>找东西，问我就行</Text>
             <Text style={s.heroSub}>拍张照片记录，或直接问位置</Text>
@@ -178,6 +212,13 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
               ))}
             </View>
           </View>
+        ) : null}
+
+        {messages.length > 0 ? (
+          <Pressable style={s.newConvBtn} onPress={startNewConversation} disabled={busy}>
+            <AppIcon name="plus" size={14} color={colors.textDim} />
+            <Text style={s.newConvText}>新对话</Text>
+          </Pressable>
         ) : null}
 
         {messages.map((msg, i) => {
@@ -281,6 +322,11 @@ const s = StyleSheet.create({
   typingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 },
   typingLabel: { color: colors.textTertiary, fontSize: 14 },
   typingDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.textTertiary },
+  newConvBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 4, paddingVertical: 6, alignSelf: 'center', opacity: 0.6
+  },
+  newConvText: { color: colors.textDim, fontSize: 13, fontWeight: '600' },
   confirmed: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 },
   confirmedText: { color: colors.green, fontSize: 14, fontWeight: '700' },
   dock: {

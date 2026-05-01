@@ -14,7 +14,10 @@ import {
   listSpaces, listPositions, getPositionDetail,
   createMediaAsset,
   getUserCredits, consumeCredit, refundCredit, addCredits,
-  confirmAndSave
+  confirmAndSave,
+  initConversationTables, getOrCreateConversation, createConversation,
+  getConversationMessages, createMessage, updateMessageConfirmed,
+  updateMessageSuggestion, updateConversationResponseId
 } from './store.js';
 
 const PORT = Number(process.env.PORT || 4000);
@@ -283,6 +286,9 @@ async function saveUploadedFile(fileData) {
 async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const method = req.method || 'GET';
+  const startTime = Date.now();
+  const log = (msg) => console.log(`[${new Date().toISOString()}] ${method} ${url.pathname} - ${msg} (${Date.now() - startTime}ms)`);
+  if (url.pathname !== '/health') log('start');
 
   if (method === 'OPTIONS') return sendJson(res, 200, {});
 
@@ -339,6 +345,19 @@ async function route(req, res) {
     return sendJson(res, 200, credits);
   }
 
+  // ─── Conversation ───
+
+  if (method === 'GET' && url.pathname === '/conversation') {
+    const conv = await getOrCreateConversation(user.id);
+    const messages = await getConversationMessages(conv.id);
+    return sendJson(res, 200, { conversation: conv, messages });
+  }
+
+  if (method === 'POST' && url.pathname === '/conversation/new') {
+    const conv = await createConversation(user.id);
+    return sendJson(res, 200, { conversation: conv, messages: [] });
+  }
+
   // ─── Spaces ───
 
   if (method === 'GET' && url.pathname === '/spaces') {
@@ -367,8 +386,8 @@ async function route(req, res) {
     let imageBase64, mimeType, videoFrames, saved;
 
     if (ct.includes('multipart/form-data')) {
-      // New: FormData file upload (image or video)
       const parts = await parseMultipart(req);
+      log('multipart parsed');
       const file = parts.file;
       if (!file?.buffer) return sendJson(res, 400, { error: 'file is required' });
       if (file.contentType && !ALLOWED_MIME_RE.test(file.contentType)) {
@@ -376,9 +395,11 @@ async function route(req, res) {
       }
 
       saved = await saveUploadedFile(file);
+      log(`blob uploaded (${(file.buffer.length / 1024).toFixed(0)}KB, ${saved.isVideo ? 'video' : 'image'})`);
 
       if (saved.isVideo) {
         videoFrames = await extractVideoFrames(saved.buffer);
+        log(`video frames extracted: ${videoFrames.length}`);
         if (!videoFrames.length) return sendJson(res, 400, { error: 'Failed to extract frames from video' });
         mimeType = 'image/jpeg';
       } else {
@@ -397,6 +418,12 @@ async function route(req, res) {
     const creditType = await consumeCredit(user.id);
     await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, saved.contentType || mimeType);
 
+    const conv = await getOrCreateConversation(user.id);
+    await createMessage(conv.id, user.id, {
+      role: 'user', type: saved.isVideo ? 'video' : 'photo',
+      blobUrl: saved.blobUrl, mediaAssetId: saved.mediaId
+    });
+
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',
@@ -407,8 +434,12 @@ async function route(req, res) {
     const sasUrl = saved.blobUrl.startsWith('https://') ? getBlobSasUrl(saved.blobUrl) : saved.blobUrl;
     sendSse(res, 'media', { media_asset_id: saved.mediaId, blob_url: sasUrl });
 
+    let agentAnswer = '';
+    let agentSuggestion = null;
+    log('starting AI agent');
+
     try {
-      await runAgent({
+      const result = await runAgent({
         mode: 'analyze',
         imageBase64,
         blobUrl: sasUrl,
@@ -416,8 +447,21 @@ async function route(req, res) {
         mimeType,
         userId: user.id,
         uploadDir: UPLOAD_DIR,
-        onEvent: (event) => sendSse(res, event.type, event)
+        previousResponseId: conv.last_response_id,
+        onEvent: (event) => {
+          sendSse(res, event.type, event);
+          if (event.type === 'answer') agentAnswer = event.text || '';
+          if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
+        }
       });
+
+      log('AI agent done');
+      const agentMsg = await createMessage(conv.id, user.id, {
+        role: 'agent', type: 'answer', content: agentAnswer,
+        suggestion: agentSuggestion, mediaAssetId: saved.mediaId
+      });
+      if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
+      sendSse(res, 'message_saved', { message_id: agentMsg.id });
     } catch (err) {
       await refundCredit(user.id, creditType).catch(() => {});
       sendSse(res, 'error', { error: err.message || 'Agent failed' });
@@ -433,6 +477,9 @@ async function route(req, res) {
     const body = await readJson(req);
     const queryText = String(body.query || '');
 
+    const conv = await getOrCreateConversation(user.id);
+    await createMessage(conv.id, user.id, { role: 'user', type: 'text', content: queryText });
+
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache',
@@ -440,13 +487,25 @@ async function route(req, res) {
       ...corsHeaders()
     });
 
-    await runAgent({
+    let agentAnswer = '';
+
+    const result = await runAgent({
       mode: 'query',
       query: queryText,
       userId: user.id,
       uploadDir: UPLOAD_DIR,
-      onEvent: (event) => sendSse(res, event.type, event)
+      previousResponseId: conv.last_response_id,
+      onEvent: (event) => {
+        sendSse(res, event.type, event);
+        if (event.type === 'answer') agentAnswer = event.text || '';
+      }
     });
+
+    const agentMsg = await createMessage(conv.id, user.id, {
+      role: 'agent', type: 'answer', content: agentAnswer
+    });
+    if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
+    sendSse(res, 'message_saved', { message_id: agentMsg.id });
 
     res.end();
     return;
@@ -456,10 +515,11 @@ async function route(req, res) {
 
   if (method === 'POST' && url.pathname === '/agent/confirm') {
     const body = await readJson(req);
-    const { suggestion, media_asset_id } = body;
+    const { suggestion, media_asset_id, message_id } = body;
     if (!suggestion) return sendJson(res, 400, { error: 'suggestion is required' });
 
     const result = await confirmAndSave(user.id, suggestion, media_asset_id);
+    if (message_id) await updateMessageConfirmed(message_id);
     return sendJson(res, 200, result);
   }
 
@@ -467,6 +527,7 @@ async function route(req, res) {
 }
 
 await loadEnvFile();
+await initConversationTables().catch(err => console.warn('DB table init:', err.message));
 
 const server = createServer((req, res) => {
   route(req, res).catch((error) => {

@@ -318,6 +318,64 @@ export function formatLocationPath(spaceName, positionName) {
   return [spaceName, positionName].filter(Boolean).join(' / ');
 }
 
+// ─── Conversations & Messages ───
+
+export async function initConversationTables() {
+  await query(`CREATE TABLE IF NOT EXISTS conversations (
+    id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id),
+    last_response_id TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
+  )`);
+  await query(`CREATE TABLE IF NOT EXISTS messages (
+    id UUID PRIMARY KEY, conversation_id UUID NOT NULL REFERENCES conversations(id),
+    user_id UUID NOT NULL, role VARCHAR(10) NOT NULL, type VARCHAR(10) NOT NULL,
+    content TEXT, blob_url TEXT, suggestion JSONB, media_asset_id UUID,
+    confirmed BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW()
+  )`);
+}
+
+export async function getOrCreateConversation(userId) {
+  const existing = await query(
+    'SELECT * FROM conversations WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1', [userId]
+  );
+  if (existing.length) return existing[0];
+  const id = newId();
+  const rows = await query('INSERT INTO conversations (id, user_id) VALUES ($1, $2) RETURNING *', [id, userId]);
+  return rows[0];
+}
+
+export async function createConversation(userId) {
+  const id = newId();
+  const rows = await query('INSERT INTO conversations (id, user_id) VALUES ($1, $2) RETURNING *', [id, userId]);
+  return rows[0];
+}
+
+export async function getConversationMessages(conversationId, limit = 50) {
+  return query('SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT $2', [conversationId, limit]);
+}
+
+export async function createMessage(conversationId, userId, { role, type, content, blobUrl, suggestion, mediaAssetId, confirmed }) {
+  const id = newId();
+  const rows = await query(
+    `INSERT INTO messages (id, conversation_id, user_id, role, type, content, blob_url, suggestion, media_asset_id, confirmed)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+    [id, conversationId, userId, role, type, content || null, blobUrl || null,
+     suggestion ? JSON.stringify(suggestion) : null, mediaAssetId || null, confirmed || false]
+  );
+  return rows[0];
+}
+
+export async function updateMessageConfirmed(messageId) {
+  await query('UPDATE messages SET confirmed = true WHERE id = $1', [messageId]);
+}
+
+export async function updateMessageSuggestion(messageId, suggestion) {
+  await query('UPDATE messages SET suggestion = $1 WHERE id = $2', [JSON.stringify(suggestion), messageId]);
+}
+
+export async function updateConversationResponseId(conversationId, responseId) {
+  await query('UPDATE conversations SET last_response_id = $1, updated_at = NOW() WHERE id = $2', [responseId, conversationId]);
+}
+
 // ─── Transactional Confirm ───
 
 export async function confirmAndSave(userId, suggestion, mediaAssetId) {
