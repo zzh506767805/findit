@@ -89,13 +89,27 @@ Expo App → API (Container Apps) → PostgreSQL
                                 → Azure OpenAI (Responses API + tools，图片用 SAS URL 直传)
 ```
 
+### 拍照识别架构
+- "我的家"页和空间详情的拍照统一跳转到助手页处理
+- 支持多图选择（allowsMultipleSelection），依次发送 AI 识别
+- 从空间详情拍照时带 space_hint 参数，AI prompt 引导归入对应空间
+- App.js 通过 pendingMedia 状态桥接：SpacesScreen 设值+切 tab → AssistantScreen 消费并发送
+
 ### 对话上下文架构
 - 助手页和我的家页共享同一个 conversation（同一个 previousResponseId 链）
 - messages 表有 `source` 字段：`assistant`（助手页）或 `spaces`（我的家页）
 - 助手页加载历史时只取 source=assistant 的消息，不显示我的家的记录
 - AI 上下文是连续的：从我的家拍照后 AI 记得空间结构，助手页查询时可利用
-- /agent/analyze?source=spaces 或默认 assistant 区分来源
+- /agent/analyze?source=spaces&space_hint=客厅 区分来源并传空间上下文
 - /conversation?source=assistant 按来源过滤返回消息
+
+### 空间/位置管理
+- 空间：手动新建（内联输入框）、长按重命名/删除
+- 位置：手动新建、长按重命名/删除
+- 后端路由：POST/PUT/DELETE /spaces/:id，POST /spaces/:id/positions，PUT/DELETE /positions/:id
+- 前端乐观更新：操作立即反映在 UI，失败自动回滚
+- 空间详情进出有滑动动画（150ms），支持左滑返回手势
+- 位置数据缓存（useRef），避免重进空间时闪烁
 
 ### Blob Storage
 - 账户：finditstore，容器：data，公开访问已关闭

@@ -83,42 +83,44 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia,
   }
 
   function handlePosLongPress(pos) {
-    Alert.alert(pos.name, '', [
-      { text: '重命名', onPress: () => promptRenamePos(pos) },
-      { text: '删除', style: 'destructive', onPress: () => confirmDeletePos(pos) },
-      { text: '取消', style: 'cancel' }
-    ]);
+    if (Platform.OS === 'web') {
+      const action = window.prompt(`${pos.name}\n输入 "delete" 删除，或输入新名称重命名，取消则留空：`);
+      if (action === null || action === '') return;
+      if (action.toLowerCase() === 'delete') { executeDeletePos(pos); return; }
+      doRenamePos(pos, action);
+    } else {
+      Alert.alert(pos.name, '', [
+        { text: '重命名', onPress: () => {
+          Alert.prompt?.('重命名位置', '', (name) => { if (name?.trim()) doRenamePos(pos, name.trim()); }, 'plain-text', pos.name);
+        }},
+        { text: '删除', style: 'destructive', onPress: () => executeDeletePos(pos) },
+        { text: '取消', style: 'cancel' }
+      ]);
+    }
   }
 
-  function promptRenamePos(pos) {
-    Alert.prompt?.('重命名位置', '', async (name) => {
-      if (!name?.trim()) return;
-      const oldName = pos.name;
-      setPositions(prev => prev.map(p => p.id === pos.id ? { ...p, name: name.trim() } : p));
-      try {
-        await requestJson(`/positions/${pos.id}`, { ...session, method: 'PUT', body: { name: name.trim() } });
-      } catch (err) {
-        setPositions(prev => prev.map(p => p.id === pos.id ? { ...p, name: oldName } : p));
-        Alert.alert('重命名失败', err.message);
-      }
-    }, 'plain-text', pos.name);
+  async function doRenamePos(pos, newName) {
+    const oldName = pos.name;
+    setPositions(prev => prev.map(p => p.id === pos.id ? { ...p, name: newName } : p));
+    try {
+      await requestJson(`/positions/${pos.id}`, { ...session, method: 'PUT', body: { name: newName } });
+    } catch (err) {
+      setPositions(prev => prev.map(p => p.id === pos.id ? { ...p, name: oldName } : p));
+      Alert.alert('重命名失败', err.message);
+    }
   }
 
-  function confirmDeletePos(pos) {
-    Alert.alert('删除位置', `确定删除"${pos.name}"及其所有物品记录？`, [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: async () => {
-        const prevPositions = positions;
-        setPositions(prev => prev.filter(p => p.id !== pos.id));
-        if (expanded === pos.id) { setExpanded(null); setDetail(null); }
-        try {
-          await requestJson(`/positions/${pos.id}`, { ...session, method: 'DELETE' });
-        } catch (err) {
-          setPositions(prevPositions);
-          Alert.alert('删除失败', err.message);
-        }
-      }}
-    ]);
+  async function executeDeletePos(pos) {
+    if (Platform.OS === 'web' && !window.confirm(`确定删除"${pos.name}"？`)) return;
+    const prevPositions = positions;
+    setPositions(prev => prev.filter(p => p.id !== pos.id));
+    if (expanded === pos.id) { setExpanded(null); setDetail(null); }
+    try {
+      await requestJson(`/positions/${pos.id}`, { ...session, method: 'DELETE' });
+    } catch (err) {
+      setPositions(prevPositions);
+      Alert.alert('删除失败', err.message);
+    }
   }
 
   async function pickPhoto() {
@@ -189,7 +191,9 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia,
                   {formatPositionItems(pos)}
                 </Text>
               </View>
-              <Text style={s.posCount}>{pos.item_count}</Text>
+              <Pressable hitSlop={10} onPress={() => handlePosLongPress(pos)} style={s.posMore}>
+                <AppIcon name="more-vertical" size={16} color={colors.textDim} />
+              </Pressable>
             </Pressable>
 
             {expanded === pos.id && detail ? (
@@ -276,6 +280,7 @@ const s = StyleSheet.create({
   posName: { color: colors.text, fontSize: 16, fontWeight: '700' },
   posItems: { color: colors.textDim, fontSize: 13, marginTop: 3 },
   posCount: { color: colors.textTertiary, fontSize: 14, fontWeight: '700' },
+  posMore: { padding: 4 },
   detail: {
     borderRadius: radius.md, backgroundColor: colors.bgRaised,
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line,

@@ -97,48 +97,63 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
   }
 
   function handleSpaceLongPress(space) {
-    Alert.alert(space.name, '', [
-      { text: '重命名', onPress: () => promptRenameSpace(space) },
-      { text: '删除', style: 'destructive', onPress: () => confirmDeleteSpace(space) },
-      { text: '取消', style: 'cancel' }
-    ]);
+    if (Platform.OS === 'web') {
+      const action = window.prompt(`${space.name}\n输入 "delete" 删除，或输入新名称重命名，取消则留空：`);
+      if (action === null || action === '') return;
+      if (action.toLowerCase() === 'delete') { doDeleteSpace(space); return; }
+      doRenameSpace(space, action);
+    } else {
+      Alert.alert(space.name, '', [
+        { text: '重命名', onPress: () => {
+          Alert.prompt?.('重命名空间', '', (name) => { if (name?.trim()) doRenameSpace(space, name.trim()); }, 'plain-text', space.name);
+        }},
+        { text: '删除', style: 'destructive', onPress: () => doDeleteSpace(space) },
+        { text: '取消', style: 'cancel' }
+      ]);
+    }
   }
 
-  function promptRenameSpace(space) {
-    Alert.prompt?.('重命名空间', '', async (name) => {
-      if (!name?.trim()) return;
-      const oldName = space.name;
-      setData(prev => ({ ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: name.trim() } : s) }));
-      try {
-        await requestJson(`/spaces/${space.id}`, { ...session, method: 'PUT', body: { name: name.trim() } });
-        onDataChanged?.();
-      } catch (err) {
-        setData(prev => ({ ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: oldName } : s) }));
-        Alert.alert('重命名失败', err.message);
-      }
-    }, 'plain-text', space.name);
+  async function doRenameSpace(space, newName) {
+    const oldName = space.name;
+    setData(prev => ({ ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: newName } : s) }));
+    try {
+      await requestJson(`/spaces/${space.id}`, { ...session, method: 'PUT', body: { name: newName } });
+      onDataChanged?.();
+    } catch (err) {
+      setData(prev => ({ ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: oldName } : s) }));
+      Alert.alert('重命名失败', err.message);
+    }
   }
 
-  function confirmDeleteSpace(space) {
-    Alert.alert('删除空间', `确定删除"${space.name}"及其所有位置和物品？`, [
-      { text: '取消', style: 'cancel' },
-      { text: '删除', style: 'destructive', onPress: async () => {
-        const prevData = data;
-        setData(prev => ({
-          ...prev,
-          spaces: prev.spaces.filter(s => s.id !== space.id),
-          total_spaces: prev.total_spaces - 1,
-          total_items: prev.total_items - (space.item_count || 0)
-        }));
-        try {
-          await requestJson(`/spaces/${space.id}`, { ...session, method: 'DELETE' });
-          onDataChanged?.();
-        } catch (err) {
-          setData(prevData);
-          Alert.alert('删除失败', err.message);
-        }
-      }}
-    ]);
+  async function doDeleteSpace(space) {
+    if (Platform.OS === 'web' ? !window.confirm(`确定删除"${space.name}"？`) : false) return;
+    if (Platform.OS !== 'web') {
+      // Native uses Alert.alert for confirmation
+      return new Promise(resolve => {
+        Alert.alert('删除空间', `确定删除"${space.name}"及其所有位置和物品？`, [
+          { text: '取消', style: 'cancel', onPress: resolve },
+          { text: '删除', style: 'destructive', onPress: () => { executeDeleteSpace(space); resolve(); }}
+        ]);
+      });
+    }
+    executeDeleteSpace(space);
+  }
+
+  async function executeDeleteSpace(space) {
+    const prevData = data;
+    setData(prev => ({
+      ...prev,
+      spaces: prev.spaces.filter(s => s.id !== space.id),
+      total_spaces: prev.total_spaces - 1,
+      total_items: prev.total_items - (space.item_count || 0)
+    }));
+    try {
+      await requestJson(`/spaces/${space.id}`, { ...session, method: 'DELETE' });
+      onDataChanged?.();
+    } catch (err) {
+      setData(prevData);
+      Alert.alert('删除失败', err.message);
+    }
   }
 
   async function pickAndSend(spaceHint) {
@@ -199,7 +214,9 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
           onLongPress={() => handleSpaceLongPress(space)}>
           <View style={s.spaceTop}>
             <Text style={s.spaceName}>{space.name}</Text>
-            <Text style={s.spaceCount}>{space.item_count}</Text>
+            <Pressable hitSlop={10} onPress={(e) => { e.stopPropagation?.(); handleSpaceLongPress(space); }}>
+              <AppIcon name="more-horizontal" size={18} color={colors.textDim} />
+            </Pressable>
           </View>
           <Text style={s.spacePositions} numberOfLines={1}>
             {space.positions?.join('  ·  ') || '暂无位置'}
