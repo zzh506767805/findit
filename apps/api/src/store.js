@@ -1,6 +1,5 @@
 import pg from 'pg';
 import { randomBytes, randomUUID } from 'node:crypto';
-import { normalizeSuggestionLocation } from './locationRules.js';
 
 let _pool;
 function pool() {
@@ -951,32 +950,31 @@ export async function deleteItem(userId, itemNameOrId) {
 // ─── Transactional Confirm ───
 
 export async function confirmAndSave(userId, suggestion, mediaAssetId) {
-  const normalizedSuggestion = normalizeSuggestionLocation(suggestion);
   const client = await pool().connect();
   try {
     await client.query('BEGIN');
 
     // findOrCreateSpace
     let space;
-    const existingSpace = await client.query('SELECT * FROM spaces WHERE user_id = $1 AND name = $2', [userId, normalizedSuggestion.space.name]);
+    const existingSpace = await client.query('SELECT * FROM spaces WHERE user_id = $1 AND name = $2', [userId, suggestion.space.name]);
     if (existingSpace.rows.length) {
       space = existingSpace.rows[0];
     } else {
       const id = newId();
-      const r = await client.query('INSERT INTO spaces (id, user_id, name) VALUES ($1, $2, $3) RETURNING *', [id, userId, normalizedSuggestion.space.name]);
+      const r = await client.query('INSERT INTO spaces (id, user_id, name) VALUES ($1, $2, $3) RETURNING *', [id, userId, suggestion.space.name]);
       space = r.rows[0];
     }
 
     // findOrCreatePosition
     let position;
-    const existingPos = await client.query('SELECT * FROM positions WHERE space_id = $1 AND name = $2', [space.id, normalizedSuggestion.position.name]);
+    const existingPos = await client.query('SELECT * FROM positions WHERE space_id = $1 AND name = $2', [space.id, suggestion.position.name]);
     if (existingPos.rows.length) {
       position = existingPos.rows[0];
     } else {
       const id = newId();
       const r = await client.query(
         'INSERT INTO positions (id, space_id, user_id, name, description) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-        [id, space.id, userId, normalizedSuggestion.position.name, normalizedSuggestion.position.description || '']
+        [id, space.id, userId, suggestion.position.name, suggestion.position.description || '']
       );
       position = r.rows[0];
     }
@@ -985,7 +983,7 @@ export async function confirmAndSave(userId, suggestion, mediaAssetId) {
       await client.query('UPDATE media_assets SET position_id = $1 WHERE id = $2', [position.id, mediaAssetId]);
     }
 
-    const allItems = normalizedSuggestion.items || [];
+    const allItems = suggestion.items || [];
 
     let savedCount = 0;
     for (const input of allItems) {

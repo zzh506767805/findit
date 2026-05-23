@@ -28,8 +28,6 @@ const POSITION_SPACE_RULES = [
 ];
 
 const GENERIC_POSITION_RE = /柜|桌|椅|架|台|床|沙发|冰箱|灶|水槽|马桶|抽屉|盒|箱|篮|筐|桶|地面|桌面|台面|墙角|角落|旁|边|顶部|上面|下面|层|收纳/;
-const GENERIC_POSITION_FRAGMENT_RE = /^(桌面|台面|地面|柜子|架子|抽屉|一角|角落|左侧|右侧|上面|下面|顶部|底部|旁边|里面|外面|第?[一二三四五六七八九十\d]+层)$/;
-const CONTAINER_RE = /盒|箱|篮|筐|抽屉|托盘|笔筒|收纳|第?[一二三四五六七八九十\d]+层/;
 
 function cleanName(name) {
   return String(name || '').trim().replace(/\s+/g, '');
@@ -69,46 +67,4 @@ export function isLikelyPositionName(name) {
   if (!text || isLikelyRoomName(text)) return false;
   if (inferSpaceNameForPosition(text)) return true;
   return GENERIC_POSITION_RE.test(text);
-}
-
-function mergePositionName(spaceAsPosition, positionName) {
-  const base = cleanName(spaceAsPosition);
-  const current = cleanName(positionName);
-  if (!base) return current;
-  if (!current || current === base || current.includes(base)) return current || base;
-  if (base.includes(current)) return base;
-  if (GENERIC_POSITION_FRAGMENT_RE.test(current) || CONTAINER_RE.test(current)) return `${base}${current}`;
-  return current;
-}
-
-export function normalizeSuggestionLocation(suggestion) {
-  if (!suggestion || typeof suggestion !== 'object') return suggestion;
-
-  const next = {
-    ...suggestion,
-    space: { ...(suggestion.space || {}) },
-    position: { ...(suggestion.position || {}) }
-  };
-
-  const spaceName = cleanName(next.space.name);
-  const positionName = cleanName(next.position.name);
-  const spaceLooksLikePosition = isLikelyPositionName(spaceName);
-
-  if (spaceLooksLikePosition) {
-    const inferredSpace = inferSpaceNameForPosition(spaceName) || inferSpaceNameForPosition(positionName) || '储物间';
-    next.space.name = inferredSpace;
-    next.position.name = mergePositionName(spaceName, positionName);
-    next.position.description = next.position.description || `从"${spaceName}"位置识别`;
-    return next;
-  }
-
-  if (!spaceName && positionName) {
-    const inferredSpace = inferSpaceNameForPosition(positionName);
-    if (inferredSpace) next.space.name = inferredSpace;
-  } else if (spaceName) {
-    const canonical = canonicalSpaceName(spaceName);
-    if (canonical) next.space.name = canonical;
-  }
-
-  return next;
 }

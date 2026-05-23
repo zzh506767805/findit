@@ -93,6 +93,12 @@ Expo App → API (Container Apps) → PostgreSQL
 - "我的家"页和空间详情的拍照统一跳转到助手页处理
 - 支持多图选择（allowsMultipleSelection），依次发送 AI 识别
 - 从空间详情拍照时带 space_hint 参数，AI prompt 引导归入对应空间
+- 识别由 `apps/api/src/agent.js` 的单 Agent 完成：系统 prompt + 当前家庭结构摘要 + Responses API tools
+- 当前家庭结构摘要由 `buildHomeSummary()` 注入，不需要模型再调用 `list_spaces` / `list_positions`
+- `space` 只表示房间/大区域；`position` 表示家具、台面、收纳点或局部区域
+- 如果历史空间名看起来像家具/位置（如"梳妆台"），摘要里标记为"疑似位置名/历史误分类"，提示模型不要作为 `space.name` 复用
+- 如果 `space_hint` 本身像家具/位置名，会被当作 position 提示，prompt 要求模型另行推断房间级 `space.name`
+- 后端不自动改写模型返回的 `suggestion`；`save_items` 返回用户可编辑草稿，`/agent/confirm` 保存用户最终确认的内容
 - App.js 通过 pendingMedia 状态桥接：SpacesScreen 设值+切 tab → AssistantScreen 消费并发送
 
 ### 对话上下文架构

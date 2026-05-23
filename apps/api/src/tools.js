@@ -1,5 +1,4 @@
 import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, searchItems, updateItem, deleteItem } from './store.js';
-import { normalizeSuggestionLocation } from './locationRules.js';
 
 export const toolDefinitions = [
   {
@@ -155,7 +154,7 @@ export async function executeTool(toolName, args, userId, uploadDir) {
     }
 
     case 'save_items':
-      return { type: 'suggestion', suggestion: normalizeSuggestionLocation(args) };
+      return { type: 'suggestion', suggestion: args };
 
     case 'update_item':
       return await updateItem(userId, args.item_name, {
