@@ -94,18 +94,29 @@ export function streamAgent(apiUrl, token, path, body, onEvent) {
   });
 }
 
+function appendUploadFile(formData, fileUriOrBlob, mimeType, index = 0) {
+  const ext = mimeType?.includes('video') ? 'mp4' : 'jpg';
+  const name = `upload_${index}.${ext}`;
+
+  if (typeof Blob !== 'undefined' && fileUriOrBlob instanceof Blob) {
+    // Web: already a Blob/File object
+    formData.append('file', fileUriOrBlob, name);
+  } else {
+    // React Native: { uri, type, name } object
+    formData.append('file', { uri: fileUriOrBlob, type: mimeType, name });
+  }
+}
+
 export function streamAgentUpload(apiUrl, token, path, fileUriOrBlob, mimeType, onEvent) {
+  return streamAgentUploadBatch(apiUrl, token, path, [{ fileUriOrBlob, mimeType }], onEvent);
+}
+
+export function streamAgentUploadBatch(apiUrl, token, path, files, onEvent) {
   return new Promise(async (resolve, reject) => {
     const formData = new FormData();
-    const ext = mimeType?.includes('video') ? 'mp4' : 'jpg';
-
-    if (fileUriOrBlob instanceof Blob) {
-      // Web: already a Blob/File object
-      formData.append('file', fileUriOrBlob, `upload.${ext}`);
-    } else {
-      // React Native: { uri, type, name } object
-      formData.append('file', { uri: fileUriOrBlob, type: mimeType, name: `upload.${ext}` });
-    }
+    files.forEach((file, index) => {
+      appendUploadFile(formData, file.fileUriOrBlob, file.mimeType, index);
+    });
 
     const xhr = new XMLHttpRequest();
     createSseHandler(xhr, onEvent, resolve, reject);

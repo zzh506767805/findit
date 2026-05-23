@@ -1,21 +1,21 @@
 {
   "name": "@findit/mobile",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "check": "node -e \"console.log('mobile app ready')\""
+    "check": "expo install --check"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
-    "expo": "~54.0.33",
+    "expo": "~54.0.34",
     "expo-apple-authentication": "~8.0.8",
     "expo-constants": "~18.0.13",
-    "expo-image-picker": "~17.0.10",
+    "expo-image-picker": "~17.0.11",
     "expo-in-app-purchases": "^14.5.0",
     "expo-secure-store": "~15.0.8",
     "react": "19.1.0",

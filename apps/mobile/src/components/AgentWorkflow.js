@@ -1,7 +1,8 @@
 import React, { useEffect, useRef } from 'react';
-import { Animated, Image, StyleSheet, Text, View } from 'react-native';
+import { Animated, StyleSheet, Text, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
-import { fullImageUrl } from '../api';
+import { fullImageUrl, mediaPreviewUrl } from '../api';
+import StableImage from './StableImage';
 import { AppIcon } from '../ui';
 import { colors, radius } from '../theme';
 
@@ -38,7 +39,7 @@ function formatToolResult(tool, result) {
   }
   if (tool === 'search_items') return `找到 ${result.count || 0} 条记录`;
   if (tool === 'view_photo') return '已查看';
-  if (tool === 'save_items') return '待确认';
+  if (tool === 'save_items') return '已整理成记录草稿';
   return null;
 }
 
@@ -72,12 +73,17 @@ export default function AgentWorkflow({ steps = [], apiUrl }) {
         }
         if (step.type === 'tool_result') {
           const summary = formatToolResult(step.tool, step.result);
-          const photoUrl = step.result?.blob_url ? fullImageUrl(apiUrl, step.result.blob_url) : null;
+          const photoPath = step.result?.preview_url || step.result?.thumbnail_url || step.result?.blob_url;
+          const directPhotoUrl = photoPath ? fullImageUrl(apiUrl, photoPath) : null;
+          const routePhotoUrl = step.result?.media_asset_id
+            ? mediaPreviewUrl(apiUrl, step.result.media_asset_id, Boolean(step.result?.thumbnail_url))
+            : null;
+          const photoUrl = directPhotoUrl || routePhotoUrl;
           if (!summary && !photoUrl) return null;
           return (
             <FadeIn key={i} delay={i * 60}>
               {summary ? <Text style={s.resultLine}>  → {summary}</Text> : null}
-              {photoUrl ? <Image source={{ uri: photoUrl }} style={s.thumb} /> : null}
+              {photoUrl ? <StableImage uri={photoUrl} style={s.thumb} /> : null}
             </FadeIn>
           );
         }
@@ -151,7 +157,11 @@ const s = StyleSheet.create({
 const mdStyles = {
   body: { color: colors.text, fontSize: 15, lineHeight: 22 },
   strong: { fontWeight: '700', color: colors.text },
-  paragraph: { marginTop: 0, marginBottom: 4 },
+  paragraph: { marginTop: 0, marginBottom: 6 },
+  heading1: { fontSize: 15, fontWeight: '700', lineHeight: 22, marginTop: 0, marginBottom: 4 },
+  heading2: { fontSize: 15, fontWeight: '700', lineHeight: 22, marginTop: 0, marginBottom: 4 },
+  heading3: { fontSize: 15, fontWeight: '700', lineHeight: 22, marginTop: 0, marginBottom: 4 },
+  heading4: { fontSize: 15, fontWeight: '700', lineHeight: 22, marginTop: 0, marginBottom: 4 },
   bullet_list: { marginTop: 2, marginBottom: 2 },
   ordered_list: { marginTop: 2, marginBottom: 2 },
   list_item: { marginTop: 1 },

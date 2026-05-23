@@ -1,11 +1,11 @@
 {
   "name": "@findit/api",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "node src/server.js",
-    "check": "node --check src/server.js && node --check src/store.js && node --check src/ai.js"
+    "check": "node --check src/*.js"
   },
   "dependencies": {
     "@azure/storage-blob": "^12.31.0",

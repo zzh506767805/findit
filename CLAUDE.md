@@ -33,8 +33,8 @@ GitHub: https://github.com/zzh506767805/findit
 - 服务器：findit-db.postgres.database.azure.com
 - 数据库名：findit
 - 用户：finditadmin
-- 8 张表：users, spaces, positions, media_assets, items, item_records, conversations, messages
-- users 额外字段：apple_user_id, free_credits(默认10), paid_credits, subscription_expires_at
+- 核心表：users, spaces, positions, media_assets, items, item_records, conversations, messages, reward_events, iap_transactions
+- users 额外字段：apple_user_id, free_credits(默认10), paid_credits, subscription_expires_at, subscription_product_id
 - messages 额外字段：source（'assistant' 或 'spaces'，标记消息来源页面）
 - 防火墙：allow-dev 开放所有IP（开发阶段），allow-azure 开放 Azure 内部
 
@@ -66,7 +66,7 @@ Find/
 │   │       │   └── SuggestionCard.js  # 识别结果确认/编辑卡片
 │   │       └── screens/
 │   │           ├── LoginScreen.js       # Apple Sign In + 开发模式 demo 登录
-│   │           ├── PaywallScreen.js     # 付费墙（年卡 + 补充包）
+│   │           ├── PaywallScreen.js     # 付费墙（标准年卡 + 大户型年卡）
 │   │           ├── AssistantScreen.js   # 助手页（对话，支持拍照/录像/文字）
 │   │           ├── SpacesScreen.js      # 我的家（空间列表 + 识别面板）
 │   │           └── SpaceDetailScreen.js # 空间详情（多图横滑 + 物品列表）
@@ -110,6 +110,7 @@ Expo App → API (Container Apps) → PostgreSQL
 - 前端乐观更新：操作立即反映在 UI，失败自动回滚
 - 空间详情进出有滑动动画（150ms），支持左滑返回手势
 - 位置数据缓存（useRef），避免重进空间时闪烁
+- 覆盖型页面（空间详情、付费页等）应作为绝对定位 layer 盖在当前页面上，不要在 App 根部提前 return 替换主页面；这样返回时首页和 `StableImage` 不会卸载重建，避免图片闪烁
 
 ### Blob Storage
 - 账户：finditstore，容器：data，公开访问已关闭
@@ -136,9 +137,11 @@ Expo App → API (Container Apps) → PostgreSQL
 ### 用量计费
 
 - 免费：10 次识别（注册时赠送）
-- 年卡：¥68/年，500 次识别
-- 补充包：¥18，120 次识别
+- 标准年卡：¥68/年，适合 100m² 以内户型，内部额度 1000 次/年
+- 大户型年卡：¥128/年，适合 300m² 以下户型，内部额度 3000 次/年
 - 查询不限次，只有识别（拍照/录像）扣次数
+- 年卡购买后写入 subscription_expires_at；付费额度只在有效期内可用，过期后 total 只计算免费额度
+- iap_transactions 按 transaction_id 去重，恢复购买不会重复加额度
 - 后端 /agent/analyze 接口调用前 consumeCredit，余额不足返回 403
 
 ## 开发调试
@@ -184,7 +187,7 @@ npx eas-cli build --profile preview --platform ios
 - [x] 两页 UI（助手对话 + 我的家空间浏览）
 - [x] SSE 流式展示 agent 工作流
 - [x] Apple Sign In 登录页（代码就绪，需 development build 测试）
-- [x] 付费墙 UI（年卡 + 补充包，IAP 待接入真实 API）
+- [x] 付费墙 UI（标准年卡 + 大户型年卡，IAP 待接入真实 API）
 - [x] 用量计费后端（free_credits + paid_credits）
 - [x] 图片改 FormData 上传 + Blob Storage 存储
 - [x] 视频录像支持（ffmpeg 截帧 → 多帧识别）
@@ -212,7 +215,7 @@ npx eas-cli build --profile preview --platform ios
 - [ ] ICP 备案提交（阿里云，需轻量服务器做备案落地）
 - [x] Apple IAP 接入真实 API（expo-in-app-purchases + 后端 receipt 验证）
 - [x] Apple Sign In identityToken 服务端验证（Apple 公钥 JWT 验签）
-- [ ] App Store Connect 创建 IAP 产品（fangnale_yearly + fangnale_topup）
+- [ ] App Store Connect 创建 IAP 产品（fangnale_yearly + fangnale_yearly_large）
 - [ ] 设置环境变量 APPLE_IAP_SHARED_SECRET
 - [ ] App 图标 + 截图
 - [ ] 隐私政策 + 用户协议
@@ -233,7 +236,7 @@ npx eas-cli build --profile preview --platform ios
 - 一个 Agent 两种模式（识别/查找），不拆多 Agent
 - 配色用米白浅色方案（theme.js 统一管理），照片是唯一色彩
 - 登录方案：强制 Apple Sign In（上架要求）
-- 付费方案：年卡 ¥68 (500次) + 补充包 ¥18 (120次)，免费 10 次
+- 付费方案：标准年卡 ¥68（100m² 以内，内部 1000 次/年）+ 大户型年卡 ¥128（300m² 以下，内部 3000 次/年），免费 10 次
 - 查询不计次，只有识别扣次数（AI 调用成本控制）
 - 日本区部署（Container Apps + PostgreSQL），阿里云做备案落地
 - 图片用 FormData multipart 上传到 Blob Storage，不用 base64
@@ -245,9 +248,11 @@ npx eas-cli build --profile preview --platform ios
 - 对话上下文：两页共享 conversation + previousResponseId，用 source 字段分开展示
 - 物品计数用 count(DISTINCT item_id) 避免同物品多次记录重复计数
 - Web 端：expo-image-picker 只用 library 模式（无 camera），FormData 用 Blob 对象
+- 首页图片稳定性：付费页/详情页这类覆盖层必须保留底层 SpacesScreen 挂载，禁止用条件 return 整页替换导致首页图片重载闪烁
 - Apple Sign In 验签：Apple 公钥 JWT 验证（issuer/audience/expiry/sub），缓存公钥 1 小时
 - IAP 验证：先请求生产 verifyReceipt，status 21007 自动 fallback 沙盒，按 productId 决定加次数
-- IAP 产品 ID：fangnale_yearly(500次)、fangnale_topup(120次)
+- IAP 产品 ID：fangnale_yearly（标准年卡，1000次）、fangnale_yearly_large（大户型年卡，3000次）；fangnale_topup 仅后端兼容旧测试，不对用户展示
+- 年卡有效期：优先使用 Apple receipt 的 expires_date_ms；没有时按当前有效期顺延 365 天，过期后重新开通从当前时间算 365 天
 - Token 持久化：原生端 expo-secure-store，Web 端 localStorage，启动时恢复+验证
 - JWT_SECRET 生产环境必须设置（否则 process.exit），开发环境用 fallback
 - save_items 工具：所有参数可选，通用于拍照识别和手动创建空间/位置/物品

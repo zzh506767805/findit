@@ -1,7 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ActionSheetIOS,
   Alert,
-  Image,
   Platform,
   Pressable,
   RefreshControl,
@@ -12,7 +12,8 @@ import {
   View
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { fullImageUrl, requestJson } from '../api';
+import { fullImageUrl, mediaPreviewUrl, requestJson } from '../api';
+import StableImage from '../components/StableImage';
 import { AppIcon, EmptyState } from '../ui';
 import { colors, radius } from '../theme';
 
@@ -26,42 +27,132 @@ function formatPositionItems(pos) {
   return `${firstItem}等${count}件物品`;
 }
 
-export default function SpaceDetailScreen({ session, space, onBack, onPickMedia, cachedPositions, onCachePositions }) {
-  const [positions, setPositions] = useState(cachedPositions || []);
+function isVideoContent(contentType) {
+  return String(contentType || '').startsWith('video/');
+}
+
+function MediaPreview({ apiUrl, uri, thumbnailUri, contentType, style, emptyIcon = 'image', allowOriginalFallback = true }) {
+  const isVideo = isVideoContent(contentType);
+  const previewPath = isVideo ? thumbnailUri : (thumbnailUri || (allowOriginalFallback ? uri : null));
+  const previewUri = fullImageUrl(apiUrl, previewPath);
+
+  return (
+    <View style={[style, s.mediaFrame]}>
+      {previewUri ? (
+        <StableImage uri={previewUri} style={s.mediaImage} />
+      ) : (
+        <View style={s.mediaEmpty}>
+          <AppIcon name={isVideo ? 'play-circle' : emptyIcon} size={20} color={isVideo ? colors.white : colors.textDim} />
+        </View>
+      )}
+      {isVideo ? (
+        <View style={s.mediaVideoOverlay}>
+          <View style={s.mediaVideoPlay}>
+            <AppIcon name="play" size={11} color={colors.white} />
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function hasDetailContent(detail) {
+  return Boolean(detail && (detail.photos?.length || detail.photo_url || detail.items?.length));
+}
+
+function hasLikelyDetailContent(pos) {
+  return Boolean(
+    Number(pos?.item_count || 0) > 0 ||
+    pos?.latest_media_asset_id ||
+    pos?.latest_photo_url ||
+    pos?.latest_thumbnail_url
+  );
+}
+
+function DetailLoading({ pos }) {
+  const hasMedia = Boolean(pos?.latest_media_asset_id || pos?.latest_photo_url || pos?.latest_thumbnail_url);
+  const itemRows = Math.min(Number(pos?.item_count || 0), 3);
+
+  return (
+    <View style={s.detailLoading}>
+      {hasMedia ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.photoStrip} contentContainerStyle={s.photoStripBody}>
+          <View style={s.detailPhotoLoading} />
+        </ScrollView>
+      ) : null}
+      {Array.from({ length: itemRows }).map((_, i) => (
+        <View key={i} style={s.detailItemLoadingRow}>
+          <View style={s.detailItemLoadingDot} />
+          <View style={s.detailItemLoadingBody}>
+            <View style={s.detailItemLoadingName} />
+            <View style={[s.detailItemLoadingDesc, i % 2 === 1 && s.detailItemLoadingDescShort]} />
+          </View>
+          <View style={s.detailItemLoadingDate} />
+        </View>
+      ))}
+    </View>
+  );
+}
+
+export default function SpaceDetailScreen({ session, space, onBack, onPickMedia }) {
+  const [positions, setPositions] = useState([]);
   const [expanded, setExpanded] = useState(null);
-  const [detail, setDetail] = useState(null);
+  const [detailsByPosition, setDetailsByPosition] = useState({});
+  const [loadingDetailId, setLoadingDetailId] = useState(null);
+  const [loadingPositions, setLoadingPositions] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [addingPos, setAddingPos] = useState(false);
   const [newPosName, setNewPosName] = useState('');
+  const detailRequestId = useRef(0);
 
   const load = useCallback(async () => {
     try {
+      setLoadingPositions(true);
       const d = await requestJson(`/spaces/${space.id}/positions`, session);
       const pos = d.positions || [];
-      setPositions(prev => {
-        if (!prev.length) { onCachePositions?.(pos); return pos; }
-        // Merge: keep old photo URLs to avoid image flicker
-        const oldMap = Object.fromEntries(prev.map(p => [p.id, p]));
-        const merged = pos.map(p => {
-          const old = oldMap[p.id];
-          if (old && p.latest_photo_url && old.latest_photo_url) {
-            return { ...p, latest_photo_url: old.latest_photo_url };
-          }
-          return p;
-        });
-        onCachePositions?.(merged);
-        return merged;
-      });
+      setPositions(pos);
     } catch {}
+    finally { setLoadingPositions(false); }
   }, [session, space.id]);
 
   useEffect(() => { load(); }, [load]);
 
-  async function toggle(posId) {
-    if (expanded === posId) { setExpanded(null); setDetail(null); return; }
+  async function toggle(pos) {
+    const posId = pos.id;
+    if (expanded === posId) {
+      detailRequestId.current += 1;
+      setExpanded(null);
+      setLoadingDetailId(null);
+      return;
+    }
+
+    if (!hasLikelyDetailContent(pos)) {
+      detailRequestId.current += 1;
+      setExpanded(null);
+      setLoadingDetailId(null);
+      return;
+    }
+
     setExpanded(posId);
-    try { setDetail(await requestJson(`/positions/${posId}/detail`, session)); }
-    catch { setDetail(null); }
+    if (detailsByPosition[posId]) {
+      setLoadingDetailId(null);
+      return;
+    }
+
+    const requestId = detailRequestId.current + 1;
+    detailRequestId.current = requestId;
+    setLoadingDetailId(posId);
+    try {
+      const nextDetail = await requestJson(`/positions/${posId}/detail`, session);
+      if (detailRequestId.current !== requestId) return;
+      setDetailsByPosition(prev => ({ ...prev, [posId]: nextDetail }));
+    } catch {
+      if (detailRequestId.current === requestId) {
+        setDetailsByPosition(prev => ({ ...prev, [posId]: null }));
+      }
+    } finally {
+      if (detailRequestId.current === requestId) setLoadingDetailId(null);
+    }
   }
 
   async function onRefresh() { setRefreshing(true); await load(); setRefreshing(false); }
@@ -88,11 +179,17 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia,
       if (action === null || action === '') return;
       if (action.toLowerCase() === 'delete') { executeDeletePos(pos); return; }
       doRenamePos(pos, action);
+    } else if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { title: pos.name, options: ['重命名', '删除', '取消'], destructiveButtonIndex: 1, cancelButtonIndex: 2 },
+        (idx) => {
+          if (idx === 0) Alert.prompt?.('重命名位置', '', (name) => { if (name?.trim()) doRenamePos(pos, name.trim()); }, 'plain-text', pos.name);
+          if (idx === 1) executeDeletePos(pos);
+        }
+      );
     } else {
       Alert.alert(pos.name, '', [
-        { text: '重命名', onPress: () => {
-          Alert.prompt?.('重命名位置', '', (name) => { if (name?.trim()) doRenamePos(pos, name.trim()); }, 'plain-text', pos.name);
-        }},
+        { text: '重命名', onPress: () => doRenamePos(pos, '') },
         { text: '删除', style: 'destructive', onPress: () => executeDeletePos(pos) },
         { text: '取消', style: 'cancel' }
       ]);
@@ -110,17 +207,70 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia,
     }
   }
 
+  function handleItemAction(item) {
+    if (Platform.OS === 'web') {
+      const action = window.prompt(`${item.item_name}\n输入 "delete" 删除，或输入新名称重命名：`);
+      if (!action) return;
+      if (action.toLowerCase() === 'delete') { doDeleteItem(item); return; }
+      doRenameItem(item, action);
+    } else if (Platform.OS === 'ios') {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { title: item.item_name, options: ['重命名', '删除', '取消'], destructiveButtonIndex: 1, cancelButtonIndex: 2 },
+        (idx) => {
+          if (idx === 0) Alert.prompt?.('重命名物品', '', (name) => { if (name?.trim()) doRenameItem(item, name.trim()); }, 'plain-text', item.item_name);
+          if (idx === 1) doDeleteItem(item);
+        }
+      );
+    }
+  }
+
+  async function doRenameItem(item, newName) {
+    patchExpandedDetail(prev => ({ ...prev, items: prev.items.map(i => i.item_id === item.item_id ? { ...i, item_name: newName } : i) }));
+    try {
+      await requestJson(`/items/${item.item_id}`, { ...session, method: 'PUT', body: { new_name: newName } });
+      load();
+    } catch (err) {
+      patchExpandedDetail(prev => ({ ...prev, items: prev.items.map(i => i.item_id === item.item_id ? { ...i, item_name: item.item_name } : i) }));
+      Alert.alert('重命名失败', err.message);
+    }
+  }
+
+  async function doDeleteItem(item) {
+    patchExpandedDetail(prev => ({ ...prev, items: prev.items.filter(i => i.item_id !== item.item_id) }));
+    try {
+      await requestJson(`/items/${item.item_id}`, { ...session, method: 'DELETE' });
+      load();
+    } catch (err) {
+      Alert.alert('删除失败', err.message);
+      load();
+    }
+  }
+
   async function executeDeletePos(pos) {
     if (Platform.OS === 'web' && !window.confirm(`确定删除"${pos.name}"？`)) return;
     const prevPositions = positions;
     setPositions(prev => prev.filter(p => p.id !== pos.id));
-    if (expanded === pos.id) { setExpanded(null); setDetail(null); }
+    if (expanded === pos.id) { setExpanded(null); setLoadingDetailId(null); }
+    setDetailsByPosition(prev => {
+      const copy = { ...prev };
+      delete copy[pos.id];
+      return copy;
+    });
     try {
       await requestJson(`/positions/${pos.id}`, { ...session, method: 'DELETE' });
     } catch (err) {
       setPositions(prevPositions);
       Alert.alert('删除失败', err.message);
     }
+  }
+
+  function patchExpandedDetail(fn) {
+    if (!expanded) return;
+    setDetailsByPosition(prev => {
+      const current = prev[expanded];
+      if (!current) return prev;
+      return { ...prev, [expanded]: fn(current) };
+    });
   }
 
   async function pickPhoto() {
@@ -155,7 +305,7 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia,
     onPickMedia(result.assets);
   }
 
-  const total = positions.reduce((n, p) => n + p.item_count, 0);
+  const total = positions.reduce((n, p) => n + Number(p.item_count || 0), 0);
 
   return (
     <View style={s.screen}>
@@ -173,18 +323,32 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia,
         showsVerticalScrollIndicator={false}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.textDim} />}>
 
-        {positions.length > 0 ? positions.map((pos) => (
+        {loadingPositions && !positions.length ? (
+          [0, 1, 2].map((i) => (
+            <View key={i} style={s.posLoadingCard}>
+              <View style={s.posLoadingThumb} />
+              <View style={s.posLoadingBody}>
+                <View style={s.posLoadingLine} />
+                <View style={[s.posLoadingLine, s.posLoadingLineShort]} />
+              </View>
+            </View>
+          ))
+        ) : positions.length > 0 ? positions.map((pos) => (
           <View key={pos.id}>
-            <Pressable style={({ pressed }) => [s.posCard, pressed && s.pressed]}
-              onPress={() => toggle(pos.id)}
+            <Pressable style={({ pressed }) => [s.posCard, pressed && s.posCardPressed]}
+              onPress={() => toggle(pos)}
               onLongPress={() => handlePosLongPress(pos)}>
-              {pos.latest_photo_url ? (
-                <Image source={{ uri: fullImageUrl(session.apiUrl, pos.latest_photo_url) }} style={s.posThumb} />
-              ) : (
-                <View style={[s.posThumb, s.posThumbEmpty]}>
-                  <AppIcon name="map-pin" size={20} color={colors.textDim} />
-                </View>
-              )}
+              <MediaPreview
+                apiUrl={session.apiUrl}
+                uri={pos.latest_photo_url}
+                thumbnailUri={pos.latest_media_asset_id
+                  ? mediaPreviewUrl(session.apiUrl, pos.latest_media_asset_id, Boolean(pos.latest_thumbnail_url))
+                  : pos.latest_thumbnail_url}
+                contentType={pos.latest_media_content_type}
+                style={s.posThumb}
+                emptyIcon="map-pin"
+                allowOriginalFallback={false}
+              />
               <View style={s.posBody}>
                 <Text style={s.posName}>{pos.name}</Text>
                 <Text style={s.posItems} numberOfLines={1}>
@@ -192,28 +356,45 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia,
                 </Text>
               </View>
               <Pressable hitSlop={10} onPress={() => handlePosLongPress(pos)} style={s.posMore}>
-                <AppIcon name="more-vertical" size={16} color={colors.textDim} />
+                <AppIcon name="more-horizontal" size={16} color={colors.textDim} />
               </Pressable>
             </Pressable>
 
-            {expanded === pos.id && detail ? (
+            {expanded === pos.id && loadingDetailId === pos.id ? (
+              <DetailLoading pos={pos} />
+            ) : null}
+
+            {expanded === pos.id && hasDetailContent(detailsByPosition[pos.id]) ? (
               <View style={s.detail}>
-                {(detail.photos?.length || detail.photo_url) ? (
+                {(detailsByPosition[pos.id].photos?.length || detailsByPosition[pos.id].photo_url) ? (
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={s.photoStrip} contentContainerStyle={s.photoStripBody}>
-                    {(detail.photos || [{ url: detail.photo_url }]).map((p, pi) => (
-                      <Image key={pi} source={{ uri: fullImageUrl(session.apiUrl, p.url) }} style={s.detailPhoto} />
+                    {(detailsByPosition[pos.id].photos || [{ url: detailsByPosition[pos.id].photo_url }]).map((p, pi) => (
+                      <MediaPreview
+                        key={pi}
+                        apiUrl={session.apiUrl}
+                        uri={p.preview_url || p.url}
+                        thumbnailUri={p.media_asset_id
+                          ? mediaPreviewUrl(session.apiUrl, p.media_asset_id, Boolean(p.thumbnail_url))
+                          : p.thumbnail_url}
+                        contentType={p.content_type}
+                        style={s.detailPhoto}
+                        allowOriginalFallback={false}
+                      />
                     ))}
                   </ScrollView>
                 ) : null}
-                {(detail.items || []).map((item, ii) => (
-                  <View key={ii} style={s.itemRow}>
+                {(detailsByPosition[pos.id].items || []).map((item, ii) => (
+                  <Pressable key={ii} style={s.itemRow} onLongPress={() => handleItemAction(item)}>
                     <View style={s.itemDot} />
                     <View style={s.itemInfo}>
                       <Text style={s.itemName}>{item.item_name}</Text>
                       {item.description ? <Text style={s.itemDesc} numberOfLines={1}>{item.description}</Text> : null}
                     </View>
                     {item.recorded_at ? <Text style={s.itemDate}>{item.recorded_at.slice(5, 10)}</Text> : null}
-                  </View>
+                    <Pressable hitSlop={8} onPress={() => handleItemAction(item)} style={s.itemMore}>
+                      <AppIcon name="more-horizontal" size={14} color={colors.textDim} />
+                    </Pressable>
+                  </Pressable>
                 ))}
               </View>
             ) : null}
@@ -274,8 +455,37 @@ const s = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 12,
     borderRadius: radius.lg, backgroundColor: colors.bgCard, padding: 12
   },
+  posCardPressed: { backgroundColor: colors.bgRaised },
+  posLoadingCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    borderRadius: radius.lg, backgroundColor: colors.bgCard, padding: 12
+  },
+  posLoadingThumb: {
+    width: 56, height: 56, borderRadius: radius.md,
+    backgroundColor: colors.bgInput
+  },
+  posLoadingBody: { flex: 1, gap: 9 },
+  posLoadingLine: {
+    height: 11, borderRadius: 6,
+    backgroundColor: colors.bgInput
+  },
+  posLoadingLineShort: { width: '58%' },
   posThumb: { width: 56, height: 56, borderRadius: radius.md, backgroundColor: colors.bgInput },
   posThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
+  mediaFrame: { overflow: 'hidden' },
+  mediaImage: { width: '100%', height: '100%' },
+  mediaEmpty: {
+    ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.bgInput
+  },
+  mediaVideoOverlay: {
+    ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.16)'
+  },
+  mediaVideoPlay: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center'
+  },
   posBody: { flex: 1, minWidth: 0 },
   posName: { color: colors.text, fontSize: 16, fontWeight: '700' },
   posItems: { color: colors.textDim, fontSize: 13, marginTop: 3 },
@@ -286,6 +496,37 @@ const s = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line,
     padding: 12, marginTop: 4, gap: 12
   },
+  detailLoading: {
+    borderRadius: radius.md, backgroundColor: colors.bgRaised,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line,
+    padding: 12, marginTop: 4, gap: 12
+  },
+  detailPhotoLoading: {
+    width: 220, height: 165, borderRadius: radius.md,
+    backgroundColor: colors.bgCard
+  },
+  detailItemLoadingRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 5, paddingHorizontal: 4
+  },
+  detailItemLoadingDot: {
+    width: 5, height: 5, borderRadius: 3,
+    backgroundColor: colors.bgCard
+  },
+  detailItemLoadingBody: { flex: 1, gap: 5 },
+  detailItemLoadingName: {
+    width: '42%', height: 12, borderRadius: 6,
+    backgroundColor: colors.bgCard
+  },
+  detailItemLoadingDesc: {
+    width: '72%', height: 10, borderRadius: 5,
+    backgroundColor: colors.bgCard
+  },
+  detailItemLoadingDescShort: { width: '54%' },
+  detailItemLoadingDate: {
+    width: 32, height: 10, borderRadius: 5,
+    backgroundColor: colors.bgCard
+  },
   photoStrip: { marginHorizontal: -12 },
   photoStripBody: { paddingHorizontal: 12, gap: 8 },
   detailPhoto: { width: 220, height: 165, borderRadius: radius.md, backgroundColor: colors.bgCard },
@@ -294,6 +535,7 @@ const s = StyleSheet.create({
   itemInfo: { flex: 1, minWidth: 0 },
   itemName: { color: colors.text, fontSize: 14, fontWeight: '600' },
   itemDesc: { color: colors.textDim, fontSize: 12, marginTop: 1 },
+  itemMore: { padding: 4 },
   itemDate: { color: colors.textTertiary, fontSize: 11 },
   addPosBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

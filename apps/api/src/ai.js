@@ -28,7 +28,11 @@ Use common Chinese item names. Keep the schema exactly:
       "confidence": "low"
     }
   ]
-}`;
+}
+Rules for location fields:
+- room_name must be a room or large home area, such as 客厅、卧室、厨房、玄关、走廊、卫生间、阳台、书房.
+- Do not put furniture, surfaces, storage points, or containers in room_name. Examples that are not room_name: 梳妆台、床头柜、衣柜、书桌、书架、电视柜、茶几、鞋柜、冰箱、洗手台、收纳盒.
+- Put those furniture/storage names in place_name instead. For example: room_name="卧室", place_name="梳妆台".`;
 
 function hasAzureConfig() {
   return Boolean(

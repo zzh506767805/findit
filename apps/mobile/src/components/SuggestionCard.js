@@ -142,7 +142,7 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
           ) : (
             <>
               <ActionButton label="修改" icon="edit-2" variant="secondary" compact onPress={startEdit} />
-              <ActionButton label="确认" icon="check" compact onPress={() => onConfirm?.(suggestion)} loading={loading} />
+              <ActionButton label="保存" icon="check" compact onPress={() => onConfirm?.(suggestion)} loading={loading} />
             </>
           )}
         </View>

@@ -43,3 +43,13 @@ export function fullImageUrl(apiUrl, path) {
   if (path.startsWith('http')) return path;
   return `${apiUrl}${path}`;
 }
+
+export function mediaImageUrl(apiUrl, mediaAssetId, variant = 'thumb') {
+  if (!mediaAssetId) return null;
+  return `${apiUrl}/media/${encodeURIComponent(mediaAssetId)}/${variant}`;
+}
+
+export function mediaPreviewUrl(apiUrl, mediaAssetId, hasThumbnail) {
+  if (!mediaAssetId) return null;
+  return mediaImageUrl(apiUrl, mediaAssetId, hasThumbnail ? 'thumb' : 'original');
+}

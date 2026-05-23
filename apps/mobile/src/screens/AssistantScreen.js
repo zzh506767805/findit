@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -15,8 +14,9 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import Markdown from 'react-native-markdown-display';
 
-import { requestJson } from '../api';
-import { streamAgent, streamAgentUpload } from '../sse';
+import { fullImageUrl, mediaPreviewUrl, requestJson } from '../api';
+import { streamAgent, streamAgentUploadBatch } from '../sse';
+import StableImage from '../components/StableImage';
 import { AppIcon } from '../ui';
 import { colors, radius, shadows } from '../theme';
 import AgentWorkflow from '../components/AgentWorkflow';
@@ -52,98 +52,269 @@ function TypingDots() {
   );
 }
 
-function serverMsgToLocal(m) {
+function serverMsgToLocal(m, apiUrl) {
   if (m.role === 'user') {
     if (m.type === 'text') return { role: 'user', type: 'text', text: m.content };
-    return { role: 'user', type: m.type, uri: m.blob_url };
+    const uri = fullImageUrl(apiUrl, m.blob_url);
+    const directThumbnailUri = fullImageUrl(apiUrl, m.thumbnail_url);
+    const routePreviewUri = m.media_asset_id
+      ? mediaPreviewUrl(apiUrl, m.media_asset_id, Boolean(m.thumbnail_url))
+      : null;
+    const thumbnailUri = directThumbnailUri || routePreviewUri;
+    const previewUri = fullImageUrl(apiUrl, m.preview_url) || thumbnailUri;
+    return {
+      role: 'user',
+      type: m.type,
+      uri,
+      previewUri,
+      thumbnailUri,
+      contentType: m.media_content_type
+    };
   }
+  const steps = Array.isArray(m.steps) ? m.steps.filter((step) => step.type !== 'answer') : [];
   return {
-    role: 'agent', steps: m.steps || [], answer: m.content,
+    role: 'agent', steps, answer: m.content,
     suggestion: m.suggestion, mediaAssetId: m.media_asset_id,
     messageId: m.id, confirmed: m.confirmed
   };
 }
 
-export default function AssistantScreen({ session, onDataChanged, credits, onNeedCredits, onCreditsChanged, pendingMedia, onPendingMediaConsumed }) {
+function UserMediaPreview({ msg }) {
+  const isVideo = msg.type === 'video';
+  const previewUri = isVideo ? (msg.thumbnailUri || msg.previewUri) : msg.previewUri;
+
+  return (
+    <View style={s.userMediaWrap}>
+      {previewUri ? (
+        <StableImage uri={previewUri} style={s.userPhoto} />
+      ) : (
+        <View style={[s.userPhoto, isVideo ? s.videoPlaceholder : s.photoPlaceholder]}>
+          <AppIcon name={isVideo ? 'play-circle' : 'image'} size={isVideo ? 32 : 24} color={isVideo ? colors.white : colors.textDim} />
+        </View>
+      )}
+      {isVideo ? (
+        <View style={s.videoOverlay}>
+          <View style={s.videoPlay}>
+            <AppIcon name="play" size={16} color={colors.white} />
+          </View>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function AssistantSkeleton() {
+  const opacity = useRef(new Animated.Value(0.55)).current;
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(opacity, { toValue: 1, duration: 650, useNativeDriver: true }),
+        Animated.timing(opacity, { toValue: 0.55, duration: 650, useNativeDriver: true })
+      ])
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [opacity]);
+
+  return (
+    <View style={s.skeletonRoot} pointerEvents="none">
+      <View style={s.skeletonAgentRow}>
+        <Animated.View style={[s.skeletonBubble, s.skeletonAgentBubble, { opacity }]}>
+          <View style={[s.skeletonLine, s.skeletonLineLong]} />
+          <View style={[s.skeletonLine, s.skeletonLineMid]} />
+        </Animated.View>
+      </View>
+      <View style={s.skeletonUserRow}>
+        <Animated.View style={[s.skeletonBubble, s.skeletonUserBubble, { opacity }]}>
+          <View style={[s.skeletonLine, s.skeletonLineMid]} />
+        </Animated.View>
+      </View>
+      <View style={s.skeletonAgentRow}>
+        <Animated.View style={[s.skeletonBubble, s.skeletonAgentBubbleWide, { opacity }]}>
+          <View style={[s.skeletonLine, s.skeletonLineLong]} />
+          <View style={[s.skeletonLine, s.skeletonLineMid]} />
+        </Animated.View>
+      </View>
+      <View style={s.skeletonUserRow}>
+        <Animated.View style={[s.skeletonBubble, s.skeletonUserBubbleShort, { opacity }]}>
+          <View style={[s.skeletonLine, s.skeletonLineShort]} />
+        </Animated.View>
+      </View>
+    </View>
+  );
+}
+
+function localDateKey(date = new Date()) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+export default function AssistantScreen({ session, onDataChanged, credits, isActive = true, onNeedCredits, onCreditsChanged, pendingMedia, onPendingMediaConsumed }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const scrollRef = useRef(null);
+  const pendingBottomScrollRef = useRef(false);
+  const loadedHistoryKeyRef = useRef(null);
+  const creditTotal = Number(credits?.total ?? ((credits?.free || 0) + (credits?.paid || 0)));
+  const todayKey = localDateKey();
 
   useEffect(() => {
+    if (!session.token) {
+      loadedHistoryKeyRef.current = null;
+      setMessages([]);
+      setLoadingHistory(false);
+      return;
+    }
+    const historyKey = `${session.apiUrl}:${session.token}:${todayKey}`;
+    if (!isActive || loadedHistoryKeyRef.current === historyKey) return;
+    loadedHistoryKeyRef.current = historyKey;
+    let cancelled = false;
+    let completed = false;
+    setLoadingHistory(true);
     (async () => {
       try {
-        const data = await requestJson('/conversation?source=assistant', session);
+        const data = await requestJson(`/conversation?client_day=${encodeURIComponent(todayKey)}&limit=30`, session);
+        if (cancelled) return;
         if (data.messages?.length) {
-          setMessages(data.messages.map(serverMsgToLocal));
+          setMessages(data.messages.map((m) => serverMsgToLocal(m, session.apiUrl)));
         } else {
           setMessages([]);
         }
-      } catch {}
-      setLoadingHistory(false);
+        completed = true;
+      } catch {
+        if (!cancelled && loadedHistoryKeyRef.current === historyKey) loadedHistoryKeyRef.current = null;
+      }
+      if (!cancelled) setLoadingHistory(false);
     })();
-  }, [session.token]);
+    return () => {
+      cancelled = true;
+      if (!completed && loadedHistoryKeyRef.current === historyKey) loadedHistoryKeyRef.current = null;
+    };
+  }, [isActive, session.apiUrl, session.token, todayKey]);
+
+  useEffect(() => {
+    if (!isActive || loadingHistory || messages.length === 0) return;
+    scrollEnd(false);
+  }, [isActive, loadingHistory, messages.length]);
 
   // Handle pending media from Spaces page
   useEffect(() => {
-    if (!pendingMedia || busy) return;
+    if (!isActive || !pendingMedia || busy || loadingHistory) return;
     const { assets, spaceHint } = pendingMedia;
     onPendingMediaConsumed?.();
-    if (assets?.length) sendMediaAssets(assets, spaceHint);
-  }, [pendingMedia]);
+    if (assets?.length) sendMediaAssets(assets, spaceHint, 'spaces');
+  }, [isActive, pendingMedia, busy, loadingHistory]);
 
-  async function sendMediaAssets(assets, spaceHint) {
+  async function sendMediaAssets(assets, spaceHint, origin = 'assistant') {
+    if (!assets?.length) return;
+    if (credits && creditTotal <= 0) {
+      onNeedCredits?.();
+      return;
+    }
     setBusy(true);
-    for (let ai = 0; ai < assets.length; ai++) {
-      const asset = assets[ai];
+    const batchId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const prepared = assets.map((asset, index) => {
       const isVideo = asset.type === 'video' || asset.uri?.match(/\.(mp4|mov|m4v)$/i);
-      const msgType = isVideo ? 'video' : 'photo';
-      const mime = isVideo ? 'video/mp4' : (asset.mimeType || 'image/jpeg');
-      const source = spaceHint ? `spaces&space_hint=${encodeURIComponent(spaceHint)}` : 'spaces';
-
-      addMsg({ role: 'user', type: msgType, uri: asset.uri });
-      addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, mediaAssetId: null });
-
-      const handleEvent = (e) => {
-        if (e.type === 'media') patchLastAgent((m) => ({ ...m, mediaAssetId: e.media_asset_id }));
-        else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
-          patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
-        else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
-        else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
-        else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
-        else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
+      const mimeType = isVideo ? (asset.mimeType || 'video/mp4') : (asset.mimeType || 'image/jpeg');
+      return {
+        asset,
+        index,
+        isVideo,
+        mimeType,
+        msgType: isVideo ? 'video' : 'photo'
       };
+    });
 
-      try {
-        let fileData = asset.uri;
+    for (const item of prepared) {
+      addMsg({
+        role: 'user',
+        type: item.msgType,
+        uri: item.asset.uri,
+        previewUri: item.isVideo ? null : item.asset.uri,
+        contentType: item.mimeType,
+        uploadBatchId: batchId,
+        uploadIndex: item.index
+      });
+    }
+    addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, mediaAssetId: null });
+
+    let uploadPath = `/agent/analyze?source=${encodeURIComponent(origin)}&client_day=${encodeURIComponent(localDateKey())}`;
+    if (spaceHint) uploadPath += `&space_hint=${encodeURIComponent(spaceHint)}`;
+
+    const handleEvent = (e) => {
+      if (e.type === 'media') {
+        const uploadIndex = Number.isInteger(e.index) ? e.index : 0;
+        const preparedItem = prepared[uploadIndex] || prepared[0];
+        const mediaUri = fullImageUrl(session.apiUrl, e.blob_url);
+        const directThumbnailUri = fullImageUrl(session.apiUrl, e.thumbnail_url);
+        const routePreviewUri = e.media_asset_id
+          ? mediaPreviewUrl(session.apiUrl, e.media_asset_id, Boolean(e.thumbnail_url))
+          : null;
+        const thumbnailUri = directThumbnailUri || routePreviewUri;
+        const previewUri = preparedItem?.isVideo
+          ? thumbnailUri
+          : (fullImageUrl(session.apiUrl, e.preview_url) || thumbnailUri || mediaUri);
+        patchUserMedia(batchId, uploadIndex, (m) => ({
+          ...m,
+          uri: mediaUri || m.uri,
+          previewUri: previewUri || m.previewUri,
+          thumbnailUri: thumbnailUri || m.thumbnailUri,
+          contentType: e.content_type || m.contentType,
+          mediaAssetId: e.media_asset_id
+        }));
+        patchLastAgent((m) => ({ ...m, mediaAssetId: m.mediaAssetId || e.media_asset_id }));
+      }
+      else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
+        patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
+      else if (e.type === 'answer_delta') patchLastAgent((m) => ({ ...m, answer: e.text || `${m.answer || ''}${e.delta || ''}` }));
+      else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text }));
+      else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
+      else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
+      else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
+    };
+
+    try {
+      const uploadFiles = [];
+      for (const item of prepared) {
+        let fileData = item.asset.uri;
         if (Platform.OS === 'web') {
-          const resp = await fetch(asset.uri);
+          const resp = await fetch(item.asset.uri);
           fileData = await resp.blob();
         }
-        await streamAgentUpload(session.apiUrl, session.token, `/agent/analyze?source=${source}`, fileData, mime, handleEvent);
-        onCreditsChanged?.();
-      } catch (err) {
-        if (err.message?.includes('已用完')) {
-          onNeedCredits?.();
-          break;
-        } else {
-          patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
-        }
+        uploadFiles.push({ fileUriOrBlob: fileData, mimeType: item.mimeType });
       }
+      await streamAgentUploadBatch(session.apiUrl, session.token, uploadPath, uploadFiles, handleEvent);
+      onCreditsChanged?.();
+    } catch (err) {
+      if (err.message?.includes('已用完')) {
+        onNeedCredits?.();
+      } else {
+        patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
+      }
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   async function startNewConversation() {
     try {
-      await requestJson('/conversation/new', { ...session, method: 'POST' });
+      await requestJson(`/conversation/new?client_day=${encodeURIComponent(localDateKey())}`, { ...session, method: 'POST' });
       setMessages([]);
     } catch {}
   }
 
-  function scrollEnd() {
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 80);
+  function scrollEnd(animated = true) {
+    pendingBottomScrollRef.current = true;
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated }), 0);
+    setTimeout(() => {
+      scrollRef.current?.scrollToEnd({ animated });
+      pendingBottomScrollRef.current = false;
+    }, 120);
   }
 
   function addMsg(msg) {
@@ -162,7 +333,25 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
     scrollEnd();
   }
 
+  function patchUserMedia(batchId, uploadIndex, fn) {
+    setMessages((prev) => {
+      const copy = [...prev];
+      for (let i = copy.length - 1; i >= 0; i--) {
+        if (copy[i].role === 'user' && copy[i].uploadBatchId === batchId && copy[i].uploadIndex === uploadIndex) {
+          copy[i] = fn(copy[i]);
+          break;
+        }
+      }
+      return copy;
+    });
+  }
+
   async function pickMedia(source, mediaType) {
+    if (credits && creditTotal <= 0) {
+      onNeedCredits?.();
+      return;
+    }
+
     const perm = source === 'camera'
       ? await ImagePicker.requestCameraPermissionsAsync()
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -192,10 +381,12 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
     setBusy(true);
 
     try {
-      await streamAgent(session.apiUrl, session.token, '/agent/query', { query: q }, (e) => {
+      const queryPath = `/agent/query?client_day=${encodeURIComponent(localDateKey())}`;
+      await streamAgent(session.apiUrl, session.token, queryPath, { query: q }, (e) => {
         if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
           patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
-        else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text, steps: [...m.steps, e] }));
+        else if (e.type === 'answer_delta') patchLastAgent((m) => ({ ...m, answer: e.text || `${m.answer || ''}${e.delta || ''}` }));
+        else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text }));
         else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
         else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
         else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
@@ -223,10 +414,19 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
     finally { setBusy(false); }
   }
 
+  if (!isActive) {
+    return <View style={s.container} />;
+  }
+
   return (
     <View style={s.container}>
       <ScrollView ref={scrollRef} style={s.scroll} contentContainerStyle={s.scrollBody}
+        onContentSizeChange={() => {
+          if (pendingBottomScrollRef.current) scrollRef.current?.scrollToEnd({ animated: false });
+        }}
         keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+
+        {loadingHistory && messages.length === 0 ? <AssistantSkeleton /> : null}
 
         {messages.length === 0 && !loadingHistory ? (
           <View style={s.hero}>
@@ -253,15 +453,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
           if (msg.role === 'user' && (msg.type === 'photo' || msg.type === 'video')) {
             return (
               <View key={i} style={s.userRow}>
-                <View>
-                  <Image source={{ uri: msg.uri }} style={s.userPhoto} />
-                  {msg.type === 'video' ? (
-                    <View style={s.videoBadge}>
-                      <AppIcon name="play-circle" size={14} color={colors.white} />
-                      <Text style={s.videoBadgeText}>视频</Text>
-                    </View>
-                  ) : null}
-                </View>
+                <UserMediaPreview msg={msg} />
               </View>
             );
           }
@@ -275,14 +467,13 @@ export default function AssistantScreen({ session, onDataChanged, credits, onNee
             );
           }
           if (msg.role === 'agent') {
-            const hasAnswerStep = msg.steps?.some((step) => step.type === 'answer');
             return (
               <View key={i} style={s.agentRow}>
                 {msg.steps?.length > 0 ? <AgentWorkflow steps={msg.steps} apiUrl={session.apiUrl} /> : null}
                 {!msg.answer && !msg.suggestion && !msg.confirmed ? (
                   <View style={s.agentLoading}><TypingDots /></View>
                 ) : null}
-                {msg.answer && !hasAnswerStep ? (
+                {msg.answer ? (
                   <View style={s.agentAnswer}>
                     <Markdown style={mdStyles}>{msg.answer}</Markdown>
                   </View>
@@ -339,6 +530,24 @@ const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
   scrollBody: { padding: 20, paddingBottom: 10, gap: 16 },
+  skeletonRoot: { gap: 16, paddingTop: 18 },
+  skeletonAgentRow: { alignItems: 'flex-start' },
+  skeletonUserRow: { alignItems: 'flex-end' },
+  skeletonBubble: {
+    backgroundColor: colors.bgInput,
+    borderRadius: radius.lg,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 9
+  },
+  skeletonAgentBubble: { width: '62%', borderBottomLeftRadius: radius.xs },
+  skeletonAgentBubbleWide: { width: '72%', borderBottomLeftRadius: radius.xs },
+  skeletonUserBubble: { width: '48%', backgroundColor: colors.bgRaised, borderBottomRightRadius: radius.xs },
+  skeletonUserBubbleShort: { width: '38%', backgroundColor: colors.bgRaised, borderBottomRightRadius: radius.xs },
+  skeletonLine: { height: 9, borderRadius: radius.full, backgroundColor: colors.lineStrong },
+  skeletonLineLong: { width: '86%' },
+  skeletonLineMid: { width: '62%' },
+  skeletonLineShort: { width: '38%' },
   hero: { alignItems: 'center', paddingTop: 80, paddingBottom: 40 },
   heroTitle: { color: colors.text, fontSize: 26, fontWeight: '800', letterSpacing: -0.5 },
   heroSub: { color: colors.textTertiary, fontSize: 15, marginTop: 8 },
@@ -346,12 +555,22 @@ const s = StyleSheet.create({
   hint: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: radius.full, borderWidth: 1, borderColor: colors.line },
   hintText: { color: colors.textSecondary, fontSize: 14, fontWeight: '600' },
   userRow: { alignItems: 'flex-end' },
+  userMediaWrap: { width: 200, height: 150, borderRadius: radius.lg, overflow: 'hidden', backgroundColor: colors.bgCard },
   userPhoto: { width: 200, height: 150, borderRadius: radius.lg, backgroundColor: colors.bgCard },
-  videoBadge: {
-    position: 'absolute', bottom: 8, right: 8, flexDirection: 'row', alignItems: 'center', gap: 4,
-    backgroundColor: 'rgba(0,0,0,0.55)', borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 3
+  videoPlaceholder: {
+    backgroundColor: colors.textDim, alignItems: 'center', justifyContent: 'center'
   },
-  videoBadgeText: { color: colors.white, fontSize: 11, fontWeight: '700' },
+  photoPlaceholder: {
+    backgroundColor: colors.bgCard, alignItems: 'center', justifyContent: 'center'
+  },
+  videoOverlay: {
+    ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.18)'
+  },
+  videoPlay: {
+    width: 34, height: 34, borderRadius: 17,
+    backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center'
+  },
   userBubble: { maxWidth: '78%', backgroundColor: colors.bgInput, borderRadius: radius.lg, borderBottomRightRadius: radius.xs, paddingHorizontal: 16, paddingVertical: 10 },
   userText: { color: colors.text, fontSize: 15, fontWeight: '400', lineHeight: 21 },
   agentRow: { gap: 8 },
@@ -360,8 +579,7 @@ const s = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 12, alignSelf: 'flex-start'
   },
   agentAnswer: {
-    backgroundColor: colors.bgInput, borderRadius: radius.lg, borderBottomLeftRadius: radius.xs,
-    paddingHorizontal: 16, paddingVertical: 10, alignSelf: 'flex-start', maxWidth: '86%'
+    paddingVertical: 4
   },
   typingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 },
   typingLabel: { color: colors.textTertiary, fontSize: 14 },

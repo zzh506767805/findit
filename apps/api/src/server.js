@@ -16,13 +16,15 @@ import {
   getPositionDetail,
   createMediaAsset,
   getUserCredits, consumeCredit, refundCredit, addCredits,
+  activateAnnualSubscription, recordIapAnnualPurchase,
+  getUserBenefits, claimWelcomeBenefit, redeemInviteCode,
   confirmAndSave,
   initConversationTables, getOrCreateConversation, createConversation,
   getConversationMessages, createMessage, updateMessageConfirmed,
-  updateMessageSuggestion, updateConversationResponseId
+  updateMessageSuggestion, updateConversationResponseId,
+  updateItem, deleteItem, getMediaAssetById
 } from './store.js';
 
-const PORT = Number(process.env.PORT || 4000);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const API_DIR = path.resolve(__dirname, '..');
 const UPLOAD_DIR = path.join(API_DIR, 'data/uploads');
@@ -43,6 +45,10 @@ async function loadEnvFile() {
     }
   } catch {}
 }
+
+await loadEnvFile();
+
+const PORT = Number(process.env.PORT || 4000);
 
 function corsHeaders() {
   return {
@@ -142,10 +148,20 @@ const APPLE_VERIFY_URL = 'https://buy.itunes.apple.com/verifyReceipt';
 const APPLE_SANDBOX_VERIFY_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
 const IAP_SHARED_SECRET = process.env.APPLE_IAP_SHARED_SECRET || '';
 
-const PRODUCT_CREDITS = {
-  fangnale_yearly: 500,
-  fangnale_topup: 120
+const ANNUAL_PRODUCTS = {
+  fangnale_yearly: { credits: 1000, label: '标准年卡' },
+  fangnale_yearly_large: { credits: 3000, label: '大户型年卡' }
 };
+const LEGACY_PRODUCT_CREDITS = { fangnale_topup: 120 };
+const PRODUCT_CREDITS = Object.fromEntries([
+  ...Object.entries(ANNUAL_PRODUCTS).map(([id, product]) => [id, product.credits]),
+  ...Object.entries(LEGACY_PRODUCT_CREDITS)
+]);
+const IAP_PRODUCT_IDS = new Set(Object.keys(PRODUCT_CREDITS));
+
+function receiptTimestamp(item) {
+  return Number(item?.expires_date_ms || item?.purchase_date_ms || item?.original_purchase_date_ms || 0);
+}
 
 async function verifyAppleReceipt(receiptData) {
   const body = JSON.stringify({ 'receipt-data': receiptData, password: IAP_SHARED_SECRET });
@@ -161,15 +177,22 @@ async function verifyAppleReceipt(receiptData) {
 
   if (result.status !== 0) throw new Error(`Receipt verification failed: status ${result.status}`);
 
-  // Get the latest transaction
+  // Get the latest known transaction for one of this app's products.
   const latestReceipt = result.latest_receipt_info || result.receipt?.in_app || [];
-  const latest = Array.isArray(latestReceipt) ? latestReceipt[latestReceipt.length - 1] : null;
+  const purchases = Array.isArray(latestReceipt)
+    ? latestReceipt.filter(item => IAP_PRODUCT_IDS.has(item?.product_id))
+    : [];
+  const latest = purchases.sort((a, b) => receiptTimestamp(a) - receiptTimestamp(b)).at(-1) || null;
   if (!latest) throw new Error('No purchase found in receipt');
+
+  const expiresMs = Number(latest.expires_date_ms || 0);
+  const expiresAt = expiresMs > 0 ? new Date(expiresMs).toISOString() : null;
 
   return {
     productId: latest.product_id,
     transactionId: latest.transaction_id,
-    originalTransactionId: latest.original_transaction_id
+    originalTransactionId: latest.original_transaction_id,
+    expiresAt
   };
 }
 
@@ -191,13 +214,131 @@ function sendJson(res, status, data) {
   res.end(JSON.stringify(addSasToUrls(data)));
 }
 
-function sendFile(res, status, body, contentType) {
-  res.writeHead(status, { 'Content-Type': contentType, ...corsHeaders() });
+function sendFile(res, status, body, contentType, extraHeaders = {}) {
+  res.writeHead(status, { 'Content-Type': contentType, ...extraHeaders, ...corsHeaders() });
   res.end(body);
+}
+
+function sendHtml(res, title, body) {
+  const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>${title}</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #202124; background: #fbfaf7; line-height: 1.7; }
+    main { max-width: 760px; margin: 0 auto; padding: 44px 22px 72px; }
+    h1 { font-size: 30px; line-height: 1.25; margin: 0 0 8px; }
+    h2 { font-size: 18px; margin: 32px 0 8px; }
+    p, li { font-size: 15px; }
+    .muted { color: #6f6a61; }
+    a { color: #2f7d5b; }
+  </style>
+</head>
+<body><main>${body}</main></body>
+</html>`;
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Cache-Control': 'public, max-age=300',
+    ...corsHeaders()
+  });
+  res.end(html);
+}
+
+function sendSupportPage(res) {
+  sendHtml(res, '放哪了—AI收纳师｜支持', `
+    <h1>放哪了—AI收纳师支持</h1>
+    <p class="muted">更新日期：2026年5月17日</p>
+    <p>放哪了—AI收纳师用于通过拍照或录像记录家中物品位置，并在需要时帮助查询物品所在位置。</p>
+    <h2>常见问题</h2>
+    <ul>
+      <li>如果识别结果不准确，可以在 App 内修改空间、位置或物品信息。</li>
+      <li>拍照和录像识别会消耗识别次数，文字查询不消耗识别次数。</li>
+      <li>会员或购买问题可以先在 App 内使用“恢复购买”。</li>
+    </ul>
+    <h2>联系我们</h2>
+    <p>如需支持，请发送邮件至 <a href="mailto:zzh506767805@gmail.com">zzh506767805@gmail.com</a>，并附上你的设备型号、系统版本、问题描述和必要截图。</p>
+    <h2>相关文档</h2>
+    <p><a href="/privacy">隐私政策</a> · <a href="/terms">用户协议</a></p>
+  `);
+}
+
+function sendPrivacyPage(res) {
+  sendHtml(res, '放哪了—AI收纳师｜隐私政策', `
+    <h1>隐私政策</h1>
+    <p class="muted">更新日期：2026年5月17日</p>
+    <p>本隐私政策说明“放哪了—AI收纳师”如何收集、使用和保护你的信息。</p>
+    <h2>我们收集的信息</h2>
+    <ul>
+      <li>账号信息：使用 Apple 登录时产生的 Apple 用户标识、邮箱和名称（如 Apple 提供）。</li>
+      <li>用户内容：你主动上传或拍摄的照片、视频，以及你创建的空间、位置、物品、描述和对话内容。</li>
+      <li>购买和用量信息：App 内购买收据、会员状态、识别次数和权益状态。</li>
+      <li>技术信息：服务请求、错误日志和必要的设备/网络诊断信息。</li>
+    </ul>
+    <h2>我们如何使用信息</h2>
+    <ul>
+      <li>提供登录、物品识别、图片/视频存储、空间管理和物品查询功能。</li>
+      <li>验证 App 内购买、发放会员权益和维护用量计费。</li>
+      <li>改进稳定性、排查故障并保障服务安全。</li>
+    </ul>
+    <h2>第三方服务</h2>
+    <p>为提供服务，我们会使用 Apple 登录和 App 内购买能力、云数据库与对象存储服务，以及 AI 图像/文本分析服务。你上传的内容可能会被发送至这些服务用于完成识别和查询。</p>
+    <h2>数据共享</h2>
+    <p>我们不会出售你的个人信息。除提供服务、遵守法律要求、处理安全风险或经你同意外，我们不会向无关第三方披露你的个人信息。</p>
+    <h2>数据保存与删除</h2>
+    <p>我们会在提供服务所需期间保存账号、照片/视频、物品记录和购买记录。你可以在 App 内或通过支持邮箱请求删除账号和相关个人数据；依法需要保留的交易或安全记录可能会按法律要求保存。</p>
+    <h2>权限说明</h2>
+    <p>相机和照片权限仅用于拍摄、选择和上传你要记录的照片或视频。你可以在系统设置中关闭相关权限，但部分功能将无法使用。</p>
+    <h2>联系我们</h2>
+    <p>隐私相关问题请联系 <a href="mailto:zzh506767805@gmail.com">zzh506767805@gmail.com</a>。</p>
+  `);
+}
+
+function sendTermsPage(res) {
+  sendHtml(res, '放哪了—AI收纳师｜用户协议', `
+    <h1>用户协议</h1>
+    <p class="muted">更新日期：2026年5月17日</p>
+    <p>使用放哪了—AI收纳师即表示你同意本协议。</p>
+    <h2>服务说明</h2>
+    <p>本 App 提供家庭物品拍照/录像记录、AI 识别、空间位置管理和物品查询功能。AI 结果可能存在错误，请以实际情况为准。</p>
+    <h2>账号与内容</h2>
+    <p>你应确保上传内容合法并拥有必要权利。请勿上传违法、侵权、敏感或与家庭收纳无关的内容。</p>
+    <h2>会员与购买</h2>
+    <p>App 内展示的会员或购买项目以 App Store 结算页为准。购买完成后，系统会根据购买项目发放对应会员权益和识别次数。如遇购买异常，可在 App 内恢复购买或联系支持。</p>
+    <h2>限制与免责声明</h2>
+    <p>本 App 不提供医疗、法律、金融或安全应急建议。由于网络、设备、第三方服务或 AI 判断限制，服务可能出现延迟、中断或识别错误。</p>
+    <h2>联系我们</h2>
+    <p>如对本协议有疑问，请联系 <a href="mailto:zzh506767805@gmail.com">zzh506767805@gmail.com</a>。</p>
+  `);
+}
+
+function redirectMedia(res, location) {
+  res.writeHead(302, {
+    Location: location,
+    'Cache-Control': 'public, max-age=1800',
+    ...corsHeaders()
+  });
+  res.end();
 }
 
 function sendSse(res, event, data) {
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+}
+
+function normalizeClientDay(value) {
+  const day = String(value || '').trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : null;
+}
+
+function clientDayFromRequest(url, body) {
+  return normalizeClientDay(url.searchParams.get('client_day') || body?.client_day);
+}
+
+function readLimit(value, fallback = 30, max = 50) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(1, Math.min(max, Math.floor(n)));
 }
 
 async function readJson(req) {
@@ -215,19 +356,65 @@ function getUserId(req) {
 
 // ─── Azure Blob Storage (see blob.js) ───
 
+async function saveBufferWithName(buffer, blobName, contentType) {
+  if (process.env.AZURE_STORAGE_ACCOUNT) {
+    await uploadToBlob(buffer, blobName, contentType);
+    return getBlobUrl(blobName); // permanent URL for DB
+  }
+  await mkdir(UPLOAD_DIR, { recursive: true });
+  await writeFile(path.join(UPLOAD_DIR, blobName), buffer);
+  return `/uploads/${blobName}`;
+}
+
+async function createImageThumbnailBuffer(buffer, contentType, maxDim = 720) {
+  const { tmpdir } = await import('node:os');
+  const dir = path.join(tmpdir(), `findit_thumb_${newId()}`);
+  const ext = contentType?.includes('png') ? 'png'
+    : contentType?.includes('webp') ? 'webp'
+    : contentType?.includes('heic') || contentType?.includes('heif') ? 'heic'
+    : 'jpg';
+  const inPath = path.join(dir, `in.${ext}`);
+  const outPath = path.join(dir, 'thumb.jpg');
+  await mkdir(dir, { recursive: true });
+  await writeFile(inPath, buffer);
+  try {
+    await execFileAsync('ffmpeg', [
+      '-y',
+      '-i', inPath,
+      '-vf', `scale='min(${maxDim},iw)':'min(${maxDim},ih)':force_original_aspect_ratio=decrease`,
+      '-frames:v', '1',
+      '-q:v', '6',
+      outPath
+    ]);
+    return await readFile(outPath);
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function saveImageThumbnail(buffer, mediaId, contentType) {
+  const thumbnail = await createImageThumbnailBuffer(buffer, contentType);
+  if (!thumbnail) return null;
+  return saveBufferWithName(thumbnail, `${mediaId}_thumb.jpg`, 'image/jpeg');
+}
+
 async function saveBase64Image({ imageBase64, mimeType }) {
   const mediaId = newId();
   const extension = mimeType?.includes('png') ? 'png' : 'jpg';
   const blobName = `${mediaId}.${extension}`;
   const buffer = Buffer.from(imageBase64, 'base64');
+  const blobUrl = await saveBufferWithName(buffer, blobName, mimeType || 'image/jpeg');
+  const thumbnailUrl = await saveImageThumbnail(buffer, mediaId, mimeType || 'image/jpeg');
+  return { mediaId, blobUrl, contentType: mimeType || 'image/jpeg', isVideo: false, thumbnailUrl };
+}
 
-  if (process.env.AZURE_STORAGE_ACCOUNT) {
-    await uploadToBlob(buffer, blobName, mimeType || 'image/jpeg');
-    return { mediaId, blobUrl: getBlobUrl(blobName) }; // permanent URL for DB
-  }
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  await writeFile(path.join(UPLOAD_DIR, blobName), buffer);
-  return { mediaId, blobUrl: `/uploads/${blobName}` };
+async function saveVideoThumbnail(frameBase64, mediaId) {
+  if (!frameBase64) return null;
+  const blobName = `${mediaId}_thumb.jpg`;
+  const buffer = Buffer.from(frameBase64, 'base64');
+  return saveBufferWithName(buffer, blobName, 'image/jpeg');
 }
 
 // ─── Multipart parser (minimal, no deps) ───
@@ -272,7 +459,12 @@ async function parseMultipart(req) {
     const ctMatch = headerStr.match(/Content-Type:\s*(.+)/i);
 
     if (fileNameMatch) {
-      parts[name] = { buffer: content, fileName: fileNameMatch[1], contentType: ctMatch?.[1]?.trim() };
+      const filePart = { buffer: content, fileName: fileNameMatch[1], contentType: ctMatch?.[1]?.trim() };
+      if (parts[name]) {
+        parts[name] = Array.isArray(parts[name]) ? [...parts[name], filePart] : [parts[name], filePart];
+      } else {
+        parts[name] = filePart;
+      }
     } else {
       parts[name] = content.toString('utf8');
     }
@@ -320,14 +512,9 @@ async function saveUploadedFile(fileData) {
   const isVideo = ct.startsWith('video/');
   const ext = isVideo ? 'mp4' : (ct.includes('png') ? 'png' : 'jpg');
   const blobName = `${mediaId}.${ext}`;
-
-  if (process.env.AZURE_STORAGE_ACCOUNT) {
-    await uploadToBlob(fileData.buffer, blobName, ct || 'application/octet-stream');
-    return { mediaId, blobUrl: getBlobUrl(blobName), contentType: ct, isVideo, buffer: fileData.buffer };
-  }
-  await mkdir(UPLOAD_DIR, { recursive: true });
-  await writeFile(path.join(UPLOAD_DIR, blobName), fileData.buffer);
-  return { mediaId, blobUrl: `/uploads/${blobName}`, contentType: ct, isVideo, buffer: fileData.buffer };
+  const blobUrl = await saveBufferWithName(fileData.buffer, blobName, ct || 'application/octet-stream');
+  const thumbnailUrl = isVideo ? null : await saveImageThumbnail(fileData.buffer, mediaId, ct || 'image/jpeg');
+  return { mediaId, blobUrl, contentType: ct, isVideo, buffer: fileData.buffer, thumbnailUrl };
 }
 
 async function route(req, res) {
@@ -338,6 +525,18 @@ async function route(req, res) {
   if (url.pathname !== '/health') log('start');
 
   if (method === 'OPTIONS') return sendJson(res, 200, {});
+
+  if (method === 'GET' && (url.pathname === '/' || url.pathname === '/support')) {
+    return sendSupportPage(res);
+  }
+
+  if (method === 'GET' && url.pathname === '/privacy') {
+    return sendPrivacyPage(res);
+  }
+
+  if (method === 'GET' && url.pathname === '/terms') {
+    return sendTermsPage(res);
+  }
 
   if (method === 'GET' && url.pathname === '/health') {
     return sendJson(res, 200, { ok: true, time: nowIso(), azure: getAzureConfigStatus() });
@@ -357,11 +556,46 @@ async function route(req, res) {
     }
   }
 
+  if (method === 'GET' && /^\/media\/[^/]+\/(thumb|original)$/.test(url.pathname)) {
+    const [, mediaId, variant] = url.pathname.match(/^\/media\/([^/]+)\/(thumb|original)$/);
+    const asset = await getMediaAssetById(mediaId);
+    if (!asset) return sendJson(res, 404, { error: 'Media not found' });
+
+    const mediaUrl = variant === 'thumb' ? asset.thumbnail_url : asset.blob_url;
+    if (!mediaUrl) return sendJson(res, 404, { error: 'Media variant not found' });
+
+    if (mediaUrl.startsWith('https://')) {
+      return redirectMedia(res, getBlobSasUrl(mediaUrl));
+    }
+
+    if (mediaUrl.startsWith('/uploads/')) {
+      const fileName = path.basename(mediaUrl);
+      const filePath = path.join(UPLOAD_DIR, fileName);
+      try {
+        const file = await readFile(filePath);
+        const contentType = fileName.endsWith('.png') ? 'image/png'
+          : fileName.endsWith('.mp4') ? 'video/mp4'
+          : 'image/jpeg';
+        return sendFile(res, 200, file, contentType, {
+          'Cache-Control': 'public, max-age=86400, immutable'
+        });
+      } catch {
+        return sendJson(res, 404, { error: 'Media file not found' });
+      }
+    }
+
+    return sendJson(res, 404, { error: 'Unsupported media URL' });
+  }
+
   if (method === 'POST' && url.pathname === '/auth/login') {
+    if (process.env.NODE_ENV === 'production') {
+      return sendJson(res, 404, { error: 'Not found' });
+    }
     const body = await readJson(req);
     const user = await getOrCreateDemoUser(body.email || 'demo@findit.local');
     const credits = await getUserCredits(user.id);
-    return sendJson(res, 200, { user, token: signToken(user.id), credits });
+    const benefits = await getUserBenefits(user.id);
+    return sendJson(res, 200, { user, token: signToken(user.id), credits, benefits });
   }
 
   if (method === 'POST' && url.pathname === '/auth/apple') {
@@ -389,7 +623,8 @@ async function route(req, res) {
     const name = fullName || (email ? email.split('@')[0] : 'User');
     const user = await getOrCreateAppleUser(appleUserId, email, name);
     const credits = await getUserCredits(user.id);
-    return sendJson(res, 200, { user, token: signToken(user.id), credits });
+    const benefits = await getUserBenefits(user.id);
+    return sendJson(res, 200, { user, token: signToken(user.id), credits, benefits });
   }
 
   const user = await requireUser(getUserId(req));
@@ -399,11 +634,35 @@ async function route(req, res) {
     return sendJson(res, 200, credits);
   }
 
+  if (method === 'GET' && url.pathname === '/user/benefits') {
+    const benefits = await getUserBenefits(user.id);
+    return sendJson(res, 200, benefits);
+  }
+
+  if (method === 'POST' && url.pathname === '/user/benefits/welcome/claim') {
+    const result = await claimWelcomeBenefit(user.id);
+    return sendJson(res, 200, result);
+  }
+
+  if (method === 'POST' && url.pathname === '/user/benefits/invite/redeem') {
+    const body = await readJson(req);
+    const result = await redeemInviteCode(user.id, body.invite_code || body.inviteCode);
+    return sendJson(res, 200, result);
+  }
+
   if (method === 'POST' && url.pathname === '/user/add-credits') {
     const body = await readJson(req);
 
-    // 开发模式：直接加次数
+    // 开发模式：按前端传入的产品模拟开通年卡；保留 amount 兜底给本地调试。
     if (process.env.NODE_ENV === 'development' && body.amount) {
+      const annualProduct = ANNUAL_PRODUCTS[body.productId];
+      if (annualProduct) {
+        const credits = await activateAnnualSubscription(user.id, {
+          productId: body.productId,
+          credits: annualProduct.credits
+        });
+        return sendJson(res, 200, { ...credits, productId: body.productId });
+      }
       await addCredits(user.id, body.amount);
       const credits = await getUserCredits(user.id);
       return sendJson(res, 200, credits);
@@ -412,8 +671,30 @@ async function route(req, res) {
     // 生产模式：验证 Apple receipt
     if (!body.receiptData) return sendJson(res, 400, { error: 'receiptData is required' });
     try {
-      const { productId, transactionId } = await verifyAppleReceipt(body.receiptData);
-      const creditsToAdd = PRODUCT_CREDITS[productId];
+      const { productId, transactionId, originalTransactionId, expiresAt } = await verifyAppleReceipt(body.receiptData);
+      const annualProduct = ANNUAL_PRODUCTS[productId];
+      if (annualProduct) {
+        if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
+          return sendJson(res, 403, { error: '订阅已过期，请重新开通年卡' });
+        }
+
+        const result = await recordIapAnnualPurchase(user.id, {
+          productId,
+          transactionId,
+          originalTransactionId,
+          expiresAt,
+          credits: annualProduct.credits
+        });
+        console.log(`[iap] user=${user.id} product=${productId} tx=${transactionId} credits=+${annualProduct.credits} expires=${result.credits.subscription.expires_at} duplicate=${result.alreadyProcessed}`);
+        return sendJson(res, 200, {
+          ...result.credits,
+          productId,
+          transactionId,
+          alreadyProcessed: result.alreadyProcessed
+        });
+      }
+
+      const creditsToAdd = LEGACY_PRODUCT_CREDITS[productId];
       if (!creditsToAdd) return sendJson(res, 400, { error: `Unknown product: ${productId}` });
       await addCredits(user.id, creditsToAdd);
       const credits = await getUserCredits(user.id);
@@ -428,15 +709,18 @@ async function route(req, res) {
   // ─── Conversation ───
 
   if (method === 'GET' && url.pathname === '/conversation') {
-    const conv = await getOrCreateConversation(user.id);
+    const clientDay = clientDayFromRequest(url);
+    const conv = await getOrCreateConversation(user.id, { clientDay });
     const source = url.searchParams.get('source') || undefined;
-    const messages = await getConversationMessages(conv.id, { source });
-    return sendJson(res, 200, { conversation: conv, messages });
+    const limit = readLimit(url.searchParams.get('limit'));
+    const messages = await getConversationMessages(conv.id, { source, limit });
+    return sendJson(res, 200, { conversation: conv, messages, client_day: clientDay });
   }
 
   if (method === 'POST' && url.pathname === '/conversation/new') {
-    const conv = await createConversation(user.id);
-    return sendJson(res, 200, { conversation: conv, messages: [] });
+    const clientDay = clientDayFromRequest(url);
+    const conv = await createConversation(user.id, { clientDay });
+    return sendJson(res, 200, { conversation: conv, messages: [], client_day: clientDay });
   }
 
   // ─── Spaces ───
@@ -505,33 +789,73 @@ async function route(req, res) {
     return sendJson(res, 200, detail);
   }
 
+  // ─── Items ───
+
+  if (method === 'PUT' && /^\/items\/[^/]+$/.test(url.pathname)) {
+    const itemId = url.pathname.split('/')[2];
+    const body = await readJson(req);
+    const result = await updateItem(user.id, itemId, body);
+    if (result.error) return sendJson(res, 404, result);
+    return sendJson(res, 200, result);
+  }
+
+  if (method === 'DELETE' && /^\/items\/[^/]+$/.test(url.pathname)) {
+    const itemId = url.pathname.split('/')[2];
+    const result = await deleteItem(user.id, itemId);
+    if (result.error) return sendJson(res, 404, result);
+    return sendJson(res, 200, result);
+  }
+
   // ─── Agent (SSE) ───
 
   if (method === 'POST' && url.pathname === '/agent/analyze') {
     const ct = req.headers['content-type'] || '';
     let imageBase64, mimeType, videoFrames, saved;
+    const savedAssets = [];
+    const mediaInputs = [];
 
     if (ct.includes('multipart/form-data')) {
       const parts = await parseMultipart(req);
       log('multipart parsed');
-      const file = parts.file;
-      if (!file?.buffer) return sendJson(res, 400, { error: 'file is required' });
-      if (file.contentType && !ALLOWED_MIME_RE.test(file.contentType)) {
-        return sendJson(res, 400, { error: 'Unsupported file type' });
+      const files = Array.isArray(parts.file) ? parts.file : (parts.file ? [parts.file] : []);
+      if (!files.length) return sendJson(res, 400, { error: 'file is required' });
+
+      for (const file of files) {
+        if (!file?.buffer) return sendJson(res, 400, { error: 'file is required' });
+        if (file.contentType && !ALLOWED_MIME_RE.test(file.contentType)) {
+          return sendJson(res, 400, { error: 'Unsupported file type' });
+        }
       }
 
-      saved = await saveUploadedFile(file);
-      log(`blob uploaded (${(file.buffer.length / 1024).toFixed(0)}KB, ${saved.isVideo ? 'video' : 'image'})`);
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const item = await saveUploadedFile(file);
+        log(`blob uploaded ${i + 1}/${files.length} (${(file.buffer.length / 1024).toFixed(0)}KB, ${item.isVideo ? 'video' : 'image'})`);
 
-      if (saved.isVideo) {
-        videoFrames = await extractVideoFrames(saved.buffer);
-        log(`video frames extracted: ${videoFrames.length}`);
-        if (!videoFrames.length) return sendJson(res, 400, { error: 'Failed to extract frames from video' });
-        mimeType = 'image/jpeg';
-      } else {
-        imageBase64 = file.buffer.toString('base64');
-        mimeType = saved.contentType || 'image/jpeg';
+        if (item.isVideo) {
+          const frames = await extractVideoFrames(item.buffer);
+          log(`video frames extracted ${i + 1}/${files.length}: ${frames.length}`);
+          if (!frames.length) return sendJson(res, 400, { error: 'Failed to extract frames from video' });
+          item.thumbnailUrl = await saveVideoThumbnail(frames[0], item.mediaId);
+          item.videoFrames = frames;
+        } else {
+          item.imageBase64 = file.buffer.toString('base64');
+        }
+
+        savedAssets.push(item);
+        mediaInputs.push({
+          kind: item.isVideo ? 'video' : 'image',
+          imageBase64: item.imageBase64,
+          blobUrl: item.blobUrl,
+          videoFrames: item.videoFrames,
+          mimeType: item.isVideo ? 'image/jpeg' : (item.contentType || 'image/jpeg')
+        });
       }
+
+      saved = savedAssets[0];
+      imageBase64 = saved?.imageBase64;
+      videoFrames = saved?.videoFrames;
+      mimeType = saved?.isVideo ? 'image/jpeg' : (saved?.contentType || 'image/jpeg');
     } else {
       // Legacy: JSON base64 upload
       const body = await readJson(req);
@@ -539,19 +863,27 @@ async function route(req, res) {
       imageBase64 = body.imageBase64;
       mimeType = body.mimeType || 'image/jpeg';
       saved = await saveBase64Image({ imageBase64, mimeType });
+      saved.imageBase64 = imageBase64;
+      savedAssets.push(saved);
+      mediaInputs.push({ kind: 'image', imageBase64, blobUrl: saved.blobUrl, mimeType });
     }
 
     const source = url.searchParams.get('source') || 'assistant';
     const spaceHint = url.searchParams.get('space_hint') || '';
+    const clientDay = clientDayFromRequest(url);
 
     const creditType = await consumeCredit(user.id);
-    await createMediaAsset(saved.mediaId, user.id, saved.blobUrl, saved.contentType || mimeType);
+    for (const item of savedAssets) {
+      await createMediaAsset(item.mediaId, user.id, item.blobUrl, item.contentType || mimeType, item.thumbnailUrl || null);
+    }
 
-    const conv = await getOrCreateConversation(user.id);
-    await createMessage(conv.id, user.id, {
-      role: 'user', type: saved.isVideo ? 'video' : 'photo',
-      blobUrl: saved.blobUrl, mediaAssetId: saved.mediaId, source
-    });
+    const conv = await getOrCreateConversation(user.id, { clientDay });
+    for (const item of savedAssets) {
+      await createMessage(conv.id, user.id, {
+        role: 'user', type: item.isVideo ? 'video' : 'photo',
+        blobUrl: item.blobUrl, mediaAssetId: item.mediaId, source
+      });
+    }
 
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
@@ -560,8 +892,29 @@ async function route(req, res) {
       ...corsHeaders()
     });
 
-    const sasUrl = saved.blobUrl.startsWith('https://') ? getBlobSasUrl(saved.blobUrl) : saved.blobUrl;
-    sendSse(res, 'media', { media_asset_id: saved.mediaId, blob_url: sasUrl });
+    const mediaForAgent = mediaInputs.map((item, index) => {
+      const asset = savedAssets[index];
+      return {
+        ...item,
+        blobUrl: asset.blobUrl.startsWith('https://') ? getBlobSasUrl(asset.blobUrl) : asset.blobUrl
+      };
+    });
+
+    savedAssets.forEach((item, index) => {
+      const sasUrl = item.blobUrl.startsWith('https://') ? getBlobSasUrl(item.blobUrl) : item.blobUrl;
+      const thumbnailUrl = item.thumbnailUrl
+        ? (item.thumbnailUrl.startsWith('https://') ? getBlobSasUrl(item.thumbnailUrl) : item.thumbnailUrl)
+        : null;
+      sendSse(res, 'media', {
+        index,
+        total: savedAssets.length,
+        media_asset_id: item.mediaId,
+        blob_url: sasUrl,
+        thumbnail_url: thumbnailUrl,
+        preview_url: thumbnailUrl || (item.isVideo ? null : sasUrl),
+        content_type: item.contentType || mimeType
+      });
+    });
 
     let agentAnswer = '';
     let agentSuggestion = null;
@@ -572,8 +925,9 @@ async function route(req, res) {
       const result = await runAgent({
         mode: 'analyze',
         imageBase64,
-        blobUrl: sasUrl,
+        blobUrl: mediaForAgent[0]?.blobUrl,
         videoFrames,
+        mediaInputs: mediaForAgent,
         mimeType,
         userId: user.id,
         uploadDir: UPLOAD_DIR,
@@ -582,6 +936,7 @@ async function route(req, res) {
         onEvent: (event) => {
           sendSse(res, event.type, event);
           if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
+          if (event.type === 'answer_delta') agentAnswer = event.text || agentAnswer;
           if (event.type === 'answer') agentAnswer = event.text || '';
           if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
         }
@@ -608,8 +963,9 @@ async function route(req, res) {
   if (method === 'POST' && url.pathname === '/agent/query') {
     const body = await readJson(req);
     const queryText = String(body.query || '');
+    const clientDay = clientDayFromRequest(url, body);
 
-    const conv = await getOrCreateConversation(user.id);
+    const conv = await getOrCreateConversation(user.id, { clientDay });
     await createMessage(conv.id, user.id, { role: 'user', type: 'text', content: queryText });
 
     res.writeHead(200, {
@@ -632,6 +988,7 @@ async function route(req, res) {
       onEvent: (event) => {
         sendSse(res, event.type, event);
         if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
+        if (event.type === 'answer_delta') agentAnswer = event.text || agentAnswer;
         if (event.type === 'answer') agentAnswer = event.text || '';
         if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
       }
@@ -663,7 +1020,6 @@ async function route(req, res) {
   return sendJson(res, 404, { error: 'Not found' });
 }
 
-await loadEnvFile();
 await initConversationTables().catch(err => console.warn('DB table init:', err.message));
 
 const server = createServer((req, res) => {

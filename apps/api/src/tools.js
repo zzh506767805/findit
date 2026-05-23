@@ -1,4 +1,5 @@
-import { getSpacesList, getPositionsBySpaceName, getPositionItems, getMediaAsset, searchItems, updateItem, deleteItem } from './store.js';
+import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, searchItems, updateItem, deleteItem } from './store.js';
+import { normalizeSuggestionLocation } from './locationRules.js';
 
 export const toolDefinitions = [
   {
@@ -87,11 +88,18 @@ export const toolDefinitions = [
       properties: {
         space: {
           type: 'object',
-          properties: { name: { type: 'string' }, is_new: { type: 'boolean' } }
+          properties: {
+            name: { type: 'string', description: '房间或家里的大区域名称，如"客厅"、"卧室"、"厨房"、"玄关"。禁止填写家具/台面/容器名。' },
+            is_new: { type: 'boolean' }
+          }
         },
         position: {
           type: 'object',
-          properties: { name: { type: 'string' }, is_new: { type: 'boolean' }, description: { type: 'string' } }
+          properties: {
+            name: { type: 'string', description: '空间内的真实家具、收纳点、台面、地面或局部区域，如"梳妆台"、"电视柜"、"书桌左侧抽屉"。' },
+            is_new: { type: 'boolean' },
+            description: { type: 'string' }
+          }
         },
         items: {
           type: 'array',
@@ -112,8 +120,11 @@ export async function executeTool(toolName, args, userId, uploadDir) {
       return await getSpacesList(userId);
 
     case 'list_positions': {
-      const positions = await getPositionsBySpaceName(userId, args.space_name);
-      if (!positions.length) return { error: `没有找到空间"${args.space_name}"` };
+      const spaceName = String(args.space_name || '').trim();
+      const positions = await getPositionsBySpaceName(userId, spaceName);
+      if (!positions.length && !(await getSpaceByName(userId, spaceName))) {
+        return { error: `没有找到空间"${spaceName}"` };
+      }
       return positions;
     }
 
@@ -123,7 +134,19 @@ export async function executeTool(toolName, args, userId, uploadDir) {
     case 'view_photo': {
       const asset = await getMediaAsset(userId, args.media_asset_id);
       if (!asset) return { error: '照片不存在' };
-      return { type: 'image', media_asset_id: asset.id, blob_url: asset.blob_url, question: args.question };
+      const isVideo = asset.content_type?.startsWith('video/');
+      const viewUrl = isVideo ? asset.thumbnail_url : asset.blob_url;
+      if (!viewUrl) return { error: '这段视频还没有可查看的预览图' };
+      return {
+        type: isVideo ? 'video_preview' : 'image',
+        media_asset_id: asset.id,
+        blob_url: viewUrl,
+        thumbnail_url: asset.thumbnail_url,
+        preview_url: asset.thumbnail_url || viewUrl,
+        original_blob_url: asset.blob_url,
+        content_type: asset.content_type,
+        question: args.question
+      };
     }
 
     case 'search_items': {
@@ -132,7 +155,7 @@ export async function executeTool(toolName, args, userId, uploadDir) {
     }
 
     case 'save_items':
-      return { type: 'suggestion', suggestion: args };
+      return { type: 'suggestion', suggestion: normalizeSuggestionLocation(args) };
 
     case 'update_item':
       return await updateItem(userId, args.item_name, {

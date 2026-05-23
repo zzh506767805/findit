@@ -3,6 +3,7 @@ import {
   Alert,
   Animated,
   Easing,
+  Image,
   PanResponder,
   Platform,
   Pressable,
@@ -18,8 +19,28 @@ import * as ImagePicker from 'expo-image-picker';
 
 import { requestJson } from '../api';
 import { AppIcon, EmptyState } from '../ui';
-import { colors, radius } from '../theme';
+import { colors, radius, shadows } from '../theme';
 import SpaceDetailScreen from './SpaceDetailScreen';
+import { getSpaceCoverSource } from '../spaceCovers';
+
+const heroFloorPlanImage = require('../../assets/home-floorplan-wash.jpg');
+
+function HeroFloorPlan() {
+  return (
+    <View pointerEvents="none" style={s.floorPlanBackdrop}>
+      <Image source={heroFloorPlanImage} style={s.floorPlanBackdropImage} resizeMode="cover" />
+    </View>
+  );
+}
+
+function SpaceImage({ space, index = 0 }) {
+  return (
+    <View style={s.sketch}>
+      <Image source={getSpaceCoverSource(space.name, index)} style={s.spaceImage} resizeMode="cover" />
+      <View style={s.spaceImageShade} />
+    </View>
+  );
+}
 
 export default function SpacesScreen({ session, onDataChanged, dataVersion, onPickMedia }) {
   const [data, setData] = useState({ spaces: [], total_spaces: 0, total_items: 0 });
@@ -27,7 +48,6 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
   const [selectedSpace, setSelectedSpace] = useState(null);
   const [addingSpace, setAddingSpace] = useState(false);
   const [newSpaceName, setNewSpaceName] = useState('');
-  const posCache = useRef({});
   const { width: screenW } = useWindowDimensions();
   const slideAnim = useRef(new Animated.Value(0)).current;
   const [showDetail, setShowDetail] = useState(false);
@@ -43,7 +63,6 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
     Animated.timing(slideAnim, { toValue: screenW, duration: 150, easing: Easing.in(Easing.cubic), useNativeDriver: true }).start(() => {
       setShowDetail(false);
       setSelectedSpace(null);
-      load();
     });
   }
 
@@ -145,7 +164,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       ...prev,
       spaces: prev.spaces.filter(s => s.id !== space.id),
       total_spaces: prev.total_spaces - 1,
-      total_items: prev.total_items - (space.item_count || 0)
+      total_items: Number(prev.total_items || 0) - Number(space.item_count || 0)
     }));
     try {
       await requestJson(`/spaces/${space.id}`, { ...session, method: 'DELETE' });
@@ -188,13 +207,15 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
     onPickMedia({ assets: result.assets, spaceHint });
   }
 
+  const spaces = data.spaces || [];
+  const hasSpaces = spaces.length > 0;
+  const totalPositions = spaces.reduce((sum, space) => sum + Number(space.positions?.length || 0), 0);
+
   return (
     <View style={s.screen}>
     {showDetail && selectedSpace ? (
       <Animated.View style={[s.detailLayer, { transform: [{ translateX: slideAnim }] }]} {...panResponder.panHandlers}>
         <SpaceDetailScreen session={session} space={selectedSpace}
-          cachedPositions={posCache.current[selectedSpace.id]}
-          onCachePositions={(pos) => { posCache.current[selectedSpace.id] = pos; }}
           onBack={closeSpace}
           onPickMedia={(assets) => onPickMedia({ assets, spaceHint: selectedSpace.name })} />
       </Animated.View>
@@ -203,28 +224,42 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       showsVerticalScrollIndicator={false}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.textDim} />}>
 
-      <View style={s.header}>
-        <Text style={s.title}>我的家</Text>
-        <Text style={s.subtitle}>{data.total_spaces} 个空间 · {data.total_items} 件物品</Text>
-      </View>
-
-      {data.spaces.length > 0 ? data.spaces.map((space) => (
-        <Pressable key={space.id} style={({ pressed }) => [s.spaceCard, pressed && s.pressed]}
-          onPress={() => openSpace(space)}
-          onLongPress={() => handleSpaceLongPress(space)}>
-          <View style={s.spaceTop}>
-            <Text style={s.spaceName}>{space.name}</Text>
-            <Pressable hitSlop={10} onPress={(e) => { e.stopPropagation?.(); handleSpaceLongPress(space); }}>
-              <AppIcon name="more-horizontal" size={18} color={colors.textDim} />
-            </Pressable>
+      <View style={s.topArea}>
+        <HeroFloorPlan />
+        <View style={s.header}>
+          <View style={s.headerText}>
+            <Text style={s.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.86}>拍照记录，想找就问</Text>
+            <View style={s.topStats}>
+              <View style={s.topStat}>
+                <Text style={s.topStatValue}>{data.total_spaces}</Text>
+                <Text style={s.topStatLabel}>空间</Text>
+              </View>
+              <View style={s.topStatDivider} />
+              <View style={s.topStat}>
+                <Text style={s.topStatValue}>{totalPositions}</Text>
+                <Text style={s.topStatLabel}>位置</Text>
+              </View>
+              <View style={s.topStatDivider} />
+              <View style={s.topStat}>
+                <Text style={s.topStatValue}>{data.total_items}</Text>
+                <Text style={s.topStatLabel}>物品</Text>
+              </View>
+            </View>
           </View>
-          <Text style={s.spacePositions} numberOfLines={1}>
-            {space.positions?.join('  ·  ') || '暂无位置'}
-          </Text>
+        </View>
+
+        <Pressable style={({ pressed }) => [s.captureBtn, pressed && s.pressed]}
+          onPress={() => pickAndSend()}>
+          <View style={s.captureIconSlot}>
+            <View style={s.captureIcon}>
+              <AppIcon name="camera" size={20} color="#5F754F" />
+            </View>
+          </View>
+          <View style={s.captureLabelWrap}>
+            <Text style={s.captureBtnText}>记录物品</Text>
+          </View>
         </Pressable>
-      )) : !addingSpace ? (
-        <EmptyState title="还没有空间" text="点击下方添加空间，或拍照让 AI 自动识别" icon="home" />
-      ) : null}
+      </View>
 
       {addingSpace ? (
         <View style={s.addRow}>
@@ -238,69 +273,179 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
             <AppIcon name="x" size={16} color={colors.textDim} />
           </Pressable>
         </View>
-      ) : (
-        <Pressable style={({ pressed }) => [s.addSpaceBtn, pressed && s.pressed]}
-          onPress={() => setAddingSpace(true)}>
-          <AppIcon name="plus" size={16} color={colors.textSecondary} />
-          <Text style={s.addSpaceBtnText}>添加空间</Text>
-        </Pressable>
-      )}
+      ) : null}
 
-      <Pressable style={({ pressed }) => [s.captureBtn, pressed && s.pressed]}
-        onPress={() => pickAndSend()}>
-        <AppIcon name="camera" size={18} color={colors.bg} />
-        <Text style={s.captureBtnText}>拍照记录</Text>
-      </Pressable>
+      <View style={s.sectionHead}>
+        <Text style={s.sectionTitle}>我的空间</Text>
+        <View style={s.sectionActions}>
+          <Text style={s.sectionMeta}>{hasSpaces ? `${spaces.length} 个` : '待创建'}</Text>
+          {!addingSpace ? (
+            <Pressable style={({ pressed }) => [s.sectionAddBtn, pressed && s.pressed]} onPress={() => setAddingSpace(true)}>
+              <AppIcon name="plus" size={16} color={colors.text} />
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+
+      {hasSpaces ? (
+        <View style={s.spaceGrid}>
+          {spaces.map((space, index) => (
+            <Pressable key={space.id} style={({ pressed }) => [s.spaceCard, pressed && s.spaceCardPressed]}
+              onPress={() => openSpace(space)}
+              onLongPress={() => handleSpaceLongPress(space)}>
+              <SpaceImage space={space} index={index} />
+              <View style={s.spaceInfo}>
+                <View style={s.spaceTop}>
+                  <View style={s.spaceNameWrap}>
+                    <Text style={s.spaceName} numberOfLines={1}>{space.name}</Text>
+                    <Text style={s.spaceCount}>{Number(space.item_count || 0)} 件物品</Text>
+                  </View>
+                  <Pressable style={s.spaceMore} hitSlop={8} onPress={(e) => { e.stopPropagation?.(); handleSpaceLongPress(space); }}>
+                    <AppIcon name="more-horizontal" size={17} color={colors.textDim} />
+                  </Pressable>
+                </View>
+                <Text style={s.spacePositions} numberOfLines={1}>
+                  {space.positions?.join('  ·  ') || '暂无位置'}
+                </Text>
+              </View>
+            </Pressable>
+          ))}
+        </View>
+      ) : !addingSpace ? (
+        <EmptyState title="还没有空间" text="点击上方添加空间，或拍照让 AI 自动识别" icon="home" />
+      ) : null}
     </ScrollView>
     </View>
   );
 }
 
 const s = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1, backgroundColor: '#F7F8F4' },
+  topArea: {
+    position: 'relative',
+    minHeight: 182,
+    paddingBottom: 0,
+    overflow: 'visible'
+  },
+  floorPlanBackdrop: {
+    position: 'absolute',
+    left: 96,
+    top: -44,
+    width: 316,
+    height: 308,
+    opacity: 0.95,
+    zIndex: 0
+  },
+  floorPlanBackdropImage: { width: '100%', height: '100%', borderRadius: radius.xl },
   list: { flex: 1 },
   detailLayer: { ...StyleSheet.absoluteFillObject, zIndex: 2, backgroundColor: colors.bg, ...(Platform.OS === 'web' ? { willChange: 'transform' } : {}) },
-  body: { padding: 20, paddingBottom: 40, gap: 12 },
-  header: { paddingVertical: 8 },
-  title: { color: colors.text, fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
-  subtitle: { color: colors.textTertiary, fontSize: 14, marginTop: 4 },
+  body: { padding: 18, paddingBottom: 28, gap: 14 },
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingTop: 8, paddingBottom: 2,
+    zIndex: 1
+  },
+  headerText: { flex: 1, minWidth: 0, maxWidth: 296 },
+  title: { color: colors.text, fontSize: 24, lineHeight: 31, fontWeight: '800' },
+  topStats: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 12 },
+  topStat: { minWidth: 42 },
+  topStatValue: { color: '#2F7D5B', fontSize: 25, fontWeight: '800', lineHeight: 29 },
+  topStatLabel: { color: colors.textSecondary, fontSize: 12, fontWeight: '700', marginTop: 1 },
+  topStatDivider: { width: StyleSheet.hairlineWidth, height: 28, backgroundColor: 'rgba(47,125,91,0.24)' },
+  captureBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    minHeight: 50, borderRadius: radius.full,
+    backgroundColor: '#5F754F',
+    paddingLeft: 6,
+    paddingRight: 12,
+    marginTop: 14,
+    width: 148,
+    zIndex: 1,
+    shadowColor: '#4F6540',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.22,
+    shadowRadius: 18,
+    elevation: 5
+  },
+  captureIconSlot: {
+    width: 42,
+    alignItems: 'flex-start',
+    justifyContent: 'center'
+  },
+  captureIcon: {
+    width: 38, height: 38, borderRadius: 19,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: colors.white
+  },
+  captureLabelWrap: {
+    flex: 1,
+    alignItems: 'center',
+    paddingRight: 1
+  },
+  captureBtnText: { color: colors.white, fontSize: 16, fontWeight: '800' },
+  sectionHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 0
+  },
+  sectionTitle: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  sectionActions: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  sectionMeta: { color: colors.textTertiary, fontSize: 13, fontWeight: '700' },
+  sectionAddBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.bgCard,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.lineStrong,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  spaceGrid: { gap: 10 },
   spaceCard: {
+    overflow: 'hidden',
     borderRadius: radius.lg, backgroundColor: colors.bgCard,
-    padding: 16, gap: 8
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line,
+    ...shadows.card
   },
-  spaceTop: {
-    flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between'
+  spaceCardPressed: { backgroundColor: '#F8F6F2' },
+  sketch: {
+    height: 136,
+    backgroundColor: '#EEE8DE',
+    overflow: 'hidden'
   },
-  spaceName: { color: colors.text, fontSize: 20, fontWeight: '800' },
-  spaceCount: { color: colors.textTertiary, fontSize: 14, fontWeight: '700' },
-  spacePositions: { color: colors.textDim, fontSize: 14 },
-  addSpaceBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 6, minHeight: 46, borderRadius: radius.lg,
-    borderWidth: 1, borderColor: colors.line, borderStyle: 'dashed'
+  spaceImage: { width: '100%', height: '100%' },
+  spaceImageShade: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(14,21,18,0.05)'
   },
-  addSpaceBtnText: { color: colors.textSecondary, fontSize: 15, fontWeight: '600' },
+  spaceInfo: { padding: 14, gap: 10 },
+  spaceTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
+  spaceNameWrap: { flex: 1, minWidth: 0 },
+  spaceName: { color: colors.text, fontSize: 18, fontWeight: '800' },
+  spaceMore: {
+    width: 30, height: 30, borderRadius: 15,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F5F3EE',
+    marginRight: -4, marginTop: -4
+  },
+  spaceCount: { color: '#2F7D5B', fontSize: 13, fontWeight: '800', marginTop: 3 },
+  spacePositions: { color: colors.textTertiary, fontSize: 13, fontWeight: '600' },
   addRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8
   },
   addInput: {
-    flex: 1, height: 44, borderRadius: radius.md,
+    flex: 1, height: 46, borderRadius: radius.lg,
     backgroundColor: colors.bgCard, paddingHorizontal: 14,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: colors.lineStrong,
     color: colors.text, fontSize: 15
   },
   addConfirm: {
     width: 36, height: 36, borderRadius: 18,
-    backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center'
+    backgroundColor: '#2F7D5B', alignItems: 'center', justifyContent: 'center'
   },
   addCancel: {
     width: 36, height: 36, borderRadius: 18,
     backgroundColor: colors.bgCard, alignItems: 'center', justifyContent: 'center'
   },
-  captureBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, minHeight: 50, borderRadius: radius.full,
-    backgroundColor: colors.primary, marginTop: 4
-  },
-  captureBtnText: { color: colors.white, fontSize: 16, fontWeight: '700' },
   pressed: { opacity: 0.7 }
 });
