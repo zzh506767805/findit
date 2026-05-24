@@ -254,7 +254,7 @@ function sendSupportPage(res) {
     <h2>常见问题</h2>
     <ul>
       <li>如果识别结果不准确，可以在 App 内修改空间、位置或物品信息。</li>
-      <li>拍照和录像识别会消耗识别次数，文字查询不消耗识别次数。</li>
+      <li>拍照和录像识别需要可用会员权益，文字查询不受影响。</li>
       <li>会员或购买问题可以先在 App 内使用“恢复购买”。</li>
     </ul>
     <h2>联系我们</h2>
@@ -273,7 +273,7 @@ function sendPrivacyPage(res) {
     <ul>
       <li>账号信息：使用 Apple 登录时产生的 Apple 用户标识、邮箱和名称（如 Apple 提供）。</li>
       <li>用户内容：你主动上传或拍摄的照片、视频，以及你创建的空间、位置、物品、描述和对话内容。</li>
-      <li>购买和用量信息：App 内购买收据、会员状态、识别次数和权益状态。</li>
+      <li>购买和用量信息：App 内购买收据、会员状态和权益状态。</li>
       <li>技术信息：服务请求、错误日志和必要的设备/网络诊断信息。</li>
     </ul>
     <h2>我们如何使用信息</h2>
@@ -305,7 +305,7 @@ function sendTermsPage(res) {
     <h2>账号与内容</h2>
     <p>你应确保上传内容合法并拥有必要权利。请勿上传违法、侵权、敏感或与家庭收纳无关的内容。</p>
     <h2>会员与购买</h2>
-    <p>App 内展示的会员或购买项目以 App Store 结算页为准。购买完成后，系统会根据购买项目发放对应会员权益和识别次数。如遇购买异常，可在 App 内恢复购买或联系支持。</p>
+    <p>App 内展示的会员或购买项目以 App Store 结算页为准。购买完成后，系统会根据购买项目发放对应会员权益。如遇购买异常，可在 App 内恢复购买或联系支持。</p>
     <h2>限制与免责声明</h2>
     <p>本 App 不提供医疗、法律、金融或安全应急建议。由于网络、设备、第三方服务或 AI 判断限制，服务可能出现延迟、中断或识别错误。</p>
     <h2>联系我们</h2>
@@ -366,13 +366,71 @@ async function saveBufferWithName(buffer, blobName, contentType) {
   return `/uploads/${blobName}`;
 }
 
+function imageExtensionFromMime(contentType) {
+  const mime = String(contentType || '').toLowerCase();
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('gif')) return 'gif';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('heic') || mime.includes('heif')) return 'heic';
+  return 'jpg';
+}
+
+function detectImageMime(buffer, fallbackMime = 'image/jpeg') {
+  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return 'image/jpeg';
+  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'image/png';
+  if (buffer.length >= 6 && /^GIF8[79]a$/.test(buffer.subarray(0, 6).toString('ascii'))) return 'image/gif';
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) return 'image/webp';
+  if (buffer.length >= 16 && buffer.subarray(4, 8).toString('ascii') === 'ftyp') {
+    const brand = buffer.subarray(8, 40).toString('ascii').toLowerCase();
+    if (/(heic|heix|hevc|hevx|heif|mif1|msf1)/.test(brand)) return 'image/heic';
+  }
+  return fallbackMime;
+}
+
+async function convertHeicToJpegBuffer(buffer, sourceMime) {
+  const { tmpdir } = await import('node:os');
+  const dir = path.join(tmpdir(), `findit_heic_${newId()}`);
+  const inputPath = path.join(dir, `input.${imageExtensionFromMime(sourceMime)}`);
+  const outputPath = path.join(dir, 'output.jpg');
+  await mkdir(dir, { recursive: true });
+  await writeFile(inputPath, buffer);
+  try {
+    await execFileAsync('heif-convert', ['-q', '95', inputPath, outputPath]);
+    return await readFile(outputPath);
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function normalizeImageForStorage(buffer, contentType) {
+  const detectedMime = detectImageMime(buffer, contentType || 'image/jpeg');
+  if (/image\/hei[cf]/i.test(detectedMime)) {
+    return {
+      buffer: await convertHeicToJpegBuffer(buffer, detectedMime),
+      contentType: 'image/jpeg',
+      extension: 'jpg',
+      convertedFrom: detectedMime
+    };
+  }
+  const normalizedMime = /image\/(jpeg|jpg|png|gif|webp)/i.test(detectedMime)
+    ? detectedMime.replace('image/jpg', 'image/jpeg')
+    : (contentType || 'image/jpeg');
+  return {
+    buffer,
+    contentType: normalizedMime,
+    extension: imageExtensionFromMime(normalizedMime),
+    convertedFrom: null
+  };
+}
+
 async function createImageThumbnailBuffer(buffer, contentType, maxDim = 720) {
   const { tmpdir } = await import('node:os');
   const dir = path.join(tmpdir(), `findit_thumb_${newId()}`);
-  const ext = contentType?.includes('png') ? 'png'
-    : contentType?.includes('webp') ? 'webp'
-    : contentType?.includes('heic') || contentType?.includes('heif') ? 'heic'
-    : 'jpg';
+  const ext = imageExtensionFromMime(contentType);
   const inPath = path.join(dir, `in.${ext}`);
   const outPath = path.join(dir, 'thumb.jpg');
   await mkdir(dir, { recursive: true });
@@ -402,12 +460,11 @@ async function saveImageThumbnail(buffer, mediaId, contentType) {
 
 async function saveBase64Image({ imageBase64, mimeType }) {
   const mediaId = newId();
-  const extension = mimeType?.includes('png') ? 'png' : 'jpg';
-  const blobName = `${mediaId}.${extension}`;
-  const buffer = Buffer.from(imageBase64, 'base64');
-  const blobUrl = await saveBufferWithName(buffer, blobName, mimeType || 'image/jpeg');
-  const thumbnailUrl = await saveImageThumbnail(buffer, mediaId, mimeType || 'image/jpeg');
-  return { mediaId, blobUrl, contentType: mimeType || 'image/jpeg', isVideo: false, thumbnailUrl };
+  const normalized = await normalizeImageForStorage(Buffer.from(imageBase64, 'base64'), mimeType || 'image/jpeg');
+  const blobName = `${mediaId}.${normalized.extension}`;
+  const blobUrl = await saveBufferWithName(normalized.buffer, blobName, normalized.contentType);
+  const thumbnailUrl = await saveImageThumbnail(normalized.buffer, mediaId, normalized.contentType);
+  return { mediaId, blobUrl, contentType: normalized.contentType, isVideo: false, thumbnailUrl, buffer: normalized.buffer };
 }
 
 async function saveVideoThumbnail(frameBase64, mediaId) {
@@ -510,11 +567,14 @@ async function saveUploadedFile(fileData) {
   const mediaId = newId();
   const ct = fileData.contentType || '';
   const isVideo = ct.startsWith('video/');
-  const ext = isVideo ? 'mp4' : (ct.includes('png') ? 'png' : 'jpg');
+  const normalized = isVideo
+    ? { buffer: fileData.buffer, contentType: ct || 'application/octet-stream', extension: 'mp4' }
+    : await normalizeImageForStorage(fileData.buffer, ct || 'image/jpeg');
+  const ext = isVideo ? 'mp4' : normalized.extension;
   const blobName = `${mediaId}.${ext}`;
-  const blobUrl = await saveBufferWithName(fileData.buffer, blobName, ct || 'application/octet-stream');
-  const thumbnailUrl = isVideo ? null : await saveImageThumbnail(fileData.buffer, mediaId, ct || 'image/jpeg');
-  return { mediaId, blobUrl, contentType: ct, isVideo, buffer: fileData.buffer, thumbnailUrl };
+  const blobUrl = await saveBufferWithName(normalized.buffer, blobName, normalized.contentType);
+  const thumbnailUrl = isVideo ? null : await saveImageThumbnail(normalized.buffer, mediaId, normalized.contentType);
+  return { mediaId, blobUrl, contentType: normalized.contentType, isVideo, buffer: normalized.buffer, thumbnailUrl };
 }
 
 async function route(req, res) {
@@ -669,7 +729,15 @@ async function route(req, res) {
     }
 
     // 生产模式：验证 Apple receipt
-    if (!body.receiptData) return sendJson(res, 400, { error: 'receiptData is required' });
+    if (!body.receiptData) {
+      console.warn('[iap] missing receiptData', {
+        user: user.id,
+        keys: Object.keys(body || {}),
+        productId: body?.productId || null,
+        transactionId: body?.transactionId || null
+      });
+      return sendJson(res, 400, { error: 'receiptData is required' });
+    }
     try {
       const { productId, transactionId, originalTransactionId, expiresAt } = await verifyAppleReceipt(body.receiptData);
       const annualProduct = ANNUAL_PRODUCTS[productId];
@@ -811,12 +879,14 @@ async function route(req, res) {
   if (method === 'POST' && url.pathname === '/agent/analyze') {
     const ct = req.headers['content-type'] || '';
     let imageBase64, mimeType, videoFrames, saved;
+    let queryText = '';
     const savedAssets = [];
     const mediaInputs = [];
 
     if (ct.includes('multipart/form-data')) {
       const parts = await parseMultipart(req);
       log('multipart parsed');
+      queryText = String(parts.query || parts.text || '').trim();
       const files = Array.isArray(parts.file) ? parts.file : (parts.file ? [parts.file] : []);
       if (!files.length) return sendJson(res, 400, { error: 'file is required' });
 
@@ -839,7 +909,7 @@ async function route(req, res) {
           item.thumbnailUrl = await saveVideoThumbnail(frames[0], item.mediaId);
           item.videoFrames = frames;
         } else {
-          item.imageBase64 = file.buffer.toString('base64');
+          item.imageBase64 = item.buffer.toString('base64');
         }
 
         savedAssets.push(item);
@@ -860,9 +930,10 @@ async function route(req, res) {
       // Legacy: JSON base64 upload
       const body = await readJson(req);
       if (!body.imageBase64) return sendJson(res, 400, { error: 'imageBase64 is required' });
-      imageBase64 = body.imageBase64;
-      mimeType = body.mimeType || 'image/jpeg';
-      saved = await saveBase64Image({ imageBase64, mimeType });
+      queryText = String(body.query || body.text || '').trim();
+      saved = await saveBase64Image({ imageBase64: body.imageBase64, mimeType: body.mimeType || 'image/jpeg' });
+      imageBase64 = saved.buffer.toString('base64');
+      mimeType = saved.contentType || 'image/jpeg';
       saved.imageBase64 = imageBase64;
       savedAssets.push(saved);
       mediaInputs.push({ kind: 'image', imageBase64, blobUrl: saved.blobUrl, mimeType });
@@ -878,6 +949,11 @@ async function route(req, res) {
     }
 
     const conv = await getOrCreateConversation(user.id, { clientDay });
+    if (queryText) {
+      await createMessage(conv.id, user.id, {
+        role: 'user', type: 'text', content: queryText, source
+      });
+    }
     for (const item of savedAssets) {
       await createMessage(conv.id, user.id, {
         role: 'user', type: item.isVideo ? 'video' : 'photo',
@@ -929,6 +1005,7 @@ async function route(req, res) {
         videoFrames,
         mediaInputs: mediaForAgent,
         mimeType,
+        query: queryText,
         userId: user.id,
         uploadDir: UPLOAD_DIR,
         previousResponseId: conv.last_response_id,
@@ -950,6 +1027,7 @@ async function route(req, res) {
       if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
       sendSse(res, 'message_saved', { message_id: agentMsg.id });
     } catch (err) {
+      log(`AI agent failed: ${err.stack || err.message || err}`);
       await refundCredit(user.id, creditType).catch(() => {});
       sendSse(res, 'error', { error: err.message || 'Agent failed' });
       res.end();

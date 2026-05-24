@@ -27,9 +27,11 @@ async function query(sql, params) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const INVITE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+const DEFAULT_FREE_CREDITS = 3;
+const WELCOME_TRIAL_PRODUCT_ID = 'welcome_trial';
 const WELCOME_GIFT_DAYS = 15;
 const INVITE_GIFT_DAYS = 15;
-const WELCOME_GIFT_CREDITS = WELCOME_GIFT_DAYS;
+const WELCOME_GIFT_CREDITS = 30;
 const INVITE_GIFT_CREDITS = INVITE_GIFT_DAYS;
 const YEARLY_SUBSCRIPTION_DAYS = 365;
 
@@ -191,18 +193,29 @@ export async function claimWelcomeBenefit(userId) {
   try {
     await client.query('BEGIN');
     const userRows = await client.query(
-      'SELECT welcome_claimed_at FROM users WHERE id = $1 FOR UPDATE',
+      `SELECT welcome_claimed_at, subscription_expires_at, subscription_product_id
+       FROM users WHERE id = $1 FOR UPDATE`,
       [userId]
     );
     if (!userRows.rows.length) throw Object.assign(new Error('User not found'), { status: 401 });
 
     let granted = false;
     if (!userRows.rows[0].welcome_claimed_at) {
+      const currentExpiresAt = asDate(userRows.rows[0].subscription_expires_at);
+      const currentActive = Boolean(currentExpiresAt && currentExpiresAt.getTime() > Date.now());
+      const nextExpiresAt = addDays(currentActive ? currentExpiresAt : new Date(), WELCOME_GIFT_DAYS);
+      const nextProductId = currentActive && userRows.rows[0].subscription_product_id
+        ? userRows.rows[0].subscription_product_id
+        : WELCOME_TRIAL_PRODUCT_ID;
+
       await client.query(
         `UPDATE users
-         SET welcome_claimed_at = NOW(), free_credits = free_credits + $2
+         SET welcome_claimed_at = NOW(),
+             paid_credits = paid_credits + $2,
+             subscription_expires_at = $3,
+             subscription_product_id = $4
          WHERE id = $1`,
-        [userId, WELCOME_GIFT_CREDITS]
+        [userId, WELCOME_GIFT_CREDITS, nextExpiresAt.toISOString(), nextProductId]
       );
       await insertRewardEvent(client, {
         userId,
@@ -327,7 +340,7 @@ export async function consumeCredit(userId) {
   );
   if (paidRows.length) return 'paid';
 
-  throw Object.assign(new Error('识别次数已用完，请购买年卡继续使用'), { status: 403 });
+  throw Object.assign(new Error('免费体验已用完，请开通会员继续使用'), { status: 403 });
 }
 
 export async function refundCredit(userId, type) {
@@ -732,6 +745,18 @@ export async function getMediaAsset(userId, mediaAssetId) {
   return rows[0] || null;
 }
 
+export async function getLatestMediaAssetForPosition(userId, positionId) {
+  const rows = await query(`
+    SELECT ma.*
+    FROM item_records ir
+    JOIN media_assets ma ON ir.media_asset_id = ma.id
+    WHERE ir.user_id = $1 AND ma.user_id = $1 AND ir.position_id = $2
+    ORDER BY ir.recorded_at DESC
+    LIMIT 1
+  `, [userId, positionId]);
+  return rows[0] || null;
+}
+
 export async function getMediaAssetById(mediaAssetId) {
   const rows = await query('SELECT * FROM media_assets WHERE id = $1', [mediaAssetId]);
   return rows[0] || null;
@@ -744,7 +769,8 @@ export function formatLocationPath(spaceName, positionName) {
 // ─── Conversations & Messages ───
 
 export async function initConversationTables() {
-  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS free_credits INTEGER DEFAULT 10`).catch(() => {});
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS free_credits INTEGER DEFAULT ${DEFAULT_FREE_CREDITS}`).catch(() => {});
+  await query(`ALTER TABLE users ALTER COLUMN free_credits SET DEFAULT ${DEFAULT_FREE_CREDITS}`).catch(() => {});
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS paid_credits INTEGER DEFAULT 0`).catch(() => {});
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_expires_at TIMESTAMPTZ`).catch(() => {});
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS subscription_product_id TEXT`).catch(() => {});

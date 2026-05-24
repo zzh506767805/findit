@@ -14,6 +14,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as SecureStore from 'expo-secure-store';
+import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { getDefaultApiUrl, requestJson } from './src/api';
 import { colors, radius } from './src/theme';
@@ -49,6 +50,7 @@ const tabs = [
   { id: 'assistant', label: '助手', icon: 'message-circle', width: 70 }
 ];
 
+const TOP_BAR_PADDING_TOP = 4;
 const TAB_GAP = 4;
 const TAB_OFFSETS = [];
 const APP_VERSION =
@@ -83,6 +85,14 @@ function AccountButton({ credits, benefits, onPress }) {
       <Feather name="user" size={16} color={colors.textSecondary} />
       {needsAttention ? <View style={s.accountBadge} /> : null}
     </Pressable>
+  );
+}
+
+function AppSafeArea({ children, style }) {
+  return (
+    <SafeAreaProvider initialMetrics={initialWindowMetrics}>
+      <SafeAreaView style={style || s.safe}>{children}</SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -240,25 +250,25 @@ export default function App() {
 
   if (restoring) {
     return (
-      <SafeAreaView style={[s.safe, { alignItems: 'center', justifyContent: 'center' }]}>
+      <AppSafeArea style={[s.safe, { alignItems: 'center', justifyContent: 'center' }]}>
         <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
         <Text style={s.logo}>FindIt</Text>
-      </SafeAreaView>
+      </AppSafeArea>
     );
   }
 
   if (!token) {
     return (
-      <SafeAreaView style={s.safe}>
+      <AppSafeArea>
         <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
         <LoginScreen apiUrl={apiUrl} onLogin={handleLogin} />
-      </SafeAreaView>
+      </AppSafeArea>
     );
   }
 
   if (showBenefits) {
     return (
-      <SafeAreaView style={s.safe}>
+      <AppSafeArea>
         <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
         <WelcomeBenefitScreen
           benefits={benefits}
@@ -266,12 +276,12 @@ export default function App() {
           onClaim={handleClaimWelcome}
           onRedeem={handleRedeemInvite}
         />
-      </SafeAreaView>
+      </AppSafeArea>
     );
   }
 
   return (
-    <SafeAreaView style={s.safe}>
+    <AppSafeArea>
       <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
       <View style={s.topBar}>
         <Text style={s.logo}>FindIt</Text>
@@ -368,7 +378,7 @@ export default function App() {
           />
         </View>
       ) : null}
-    </SafeAreaView>
+    </AppSafeArea>
   );
 }
 
@@ -377,7 +387,7 @@ const s = StyleSheet.create({
   topBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 20,
-    paddingTop: 8,
+    paddingTop: TOP_BAR_PADDING_TOP,
     paddingBottom: 4,
     backgroundColor: '#F7F8F4'
   },

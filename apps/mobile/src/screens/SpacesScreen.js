@@ -196,7 +196,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
     const options = {
       mediaTypes: ['images', 'videos'],
       videoMaxDuration: 10,
-      quality: 0.72,
+      quality: 1,
       allowsMultipleSelection: source !== 'camera'
     };
     const result = source === 'camera'
@@ -204,7 +204,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       : await ImagePicker.launchImageLibraryAsync(options);
     if (result.canceled || !result.assets?.length) return;
 
-    onPickMedia({ assets: result.assets, spaceHint });
+    onPickMedia({ assets: result.assets, spaceHint, source });
   }
 
   const spaces = data.spaces || [];
@@ -217,7 +217,10 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       <Animated.View style={[s.detailLayer, { transform: [{ translateX: slideAnim }] }]} {...panResponder.panHandlers}>
         <SpaceDetailScreen session={session} space={selectedSpace}
           onBack={closeSpace}
-          onPickMedia={(assets) => onPickMedia({ assets, spaceHint: selectedSpace.name })} />
+          onPickMedia={(media) => {
+            const payload = Array.isArray(media) ? { assets: media } : media;
+            onPickMedia({ ...payload, spaceHint: selectedSpace.name });
+          }} />
       </Animated.View>
     ) : null}
     <ScrollView style={s.list} contentContainerStyle={s.body}

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, StyleSheet, View } from 'react-native';
 
 import { colors } from '../theme';
@@ -13,7 +13,7 @@ function sourceKey(source) {
 }
 
 export default function StableImage({ source, uri, style, imageStyle, resizeMode = 'cover', placeholderStyle }) {
-  const nextSource = source || (uri ? { uri } : null);
+  const nextSource = useMemo(() => source || (uri ? { uri } : null), [source, uri]);
   const nextKey = sourceKey(nextSource);
   const initiallyLoaded = Boolean(nextSource && (typeof nextSource === 'number' || loadedSourceKeys.has(nextKey)));
   const [current, setCurrent] = useState(nextSource);
@@ -24,10 +24,10 @@ export default function StableImage({ source, uri, style, imageStyle, resizeMode
 
   useEffect(() => {
     if (!nextSource) {
-      setCurrent(null);
-      setCurrentKey('');
-      setPending(null);
-      setLoaded(false);
+      if (current !== null) setCurrent(null);
+      if (currentKey) setCurrentKey('');
+      setPending((prev) => (prev === null ? prev : null));
+      setLoaded((prev) => (prev ? false : prev));
       opacity.setValue(0);
       return;
     }
@@ -51,7 +51,9 @@ export default function StableImage({ source, uri, style, imageStyle, resizeMode
         opacity.setValue(1);
         return;
       }
-      setPending({ source: nextSource, key: nextKey });
+      setPending((prev) => (
+        prev?.key === nextKey ? prev : { source: nextSource, key: nextKey }
+      ));
     }
   }, [current, currentKey, nextKey, nextSource, opacity]);
 

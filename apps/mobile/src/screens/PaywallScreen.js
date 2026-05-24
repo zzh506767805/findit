@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, SafeAreaView, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import Constants from 'expo-constants';
+import { initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
 let InAppPurchases = null;
 try { InAppPurchases = require('expo-in-app-purchases'); } catch {}
 import { requestJson } from '../api';
@@ -13,16 +15,10 @@ const PRODUCTS = [
 const PRODUCT_IDS = PRODUCTS.map(p => p.id);
 
 const PRODUCT_LABELS = {
+  welcome_trial: '新人会员',
   fangnale_yearly: '标准版',
   fangnale_yearly_large: '大户型版'
 };
-
-function readCredits(credits) {
-  const free = Number(credits?.free || 0);
-  const paid = Number(credits?.paid || 0);
-  const total = Number(credits?.total ?? (free + paid));
-  return { free, paid, total };
-}
 
 function readSubscription(credits) {
   const subscription = credits?.subscription || {};
@@ -39,6 +35,39 @@ function formatDate(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+}
+
+function readReceiptData(purchase) {
+  const receipt = purchase?.transactionReceipt
+    || purchase?.receiptData
+    || purchase?.receipt
+    || purchase?.transaction?.transactionReceipt
+    || null;
+  return typeof receipt === 'string' && receipt.trim() ? receipt.trim() : null;
+}
+
+function purchaseDebugSummary(purchase) {
+  if (!purchase) return { present: false };
+  return {
+    keys: Object.keys(purchase),
+    productId: purchase.productId || null,
+    orderId: purchase.orderId || null,
+    originalOrderId: purchase.originalOrderId || null,
+    purchaseState: purchase.purchaseState,
+    acknowledged: purchase.acknowledged,
+    receiptLength: readReceiptData(purchase)?.length || 0,
+    hasTransactionReceipt: Boolean(purchase.transactionReceipt),
+    hasReceiptData: Boolean(purchase.receiptData),
+    hasReceipt: Boolean(purchase.receipt)
+  };
+}
+
+function isProcessablePurchase(purchase) {
+  const state = purchase?.purchaseState;
+  const states = InAppPurchases?.InAppPurchaseState || {};
+  const purchased = states.PURCHASED ?? 1;
+  const restored = states.RESTORED ?? 3;
+  return state == null || state === purchased || state === restored;
 }
 
 export default function PaywallScreen({
@@ -62,19 +91,26 @@ export default function PaywallScreen({
   const [notice, setNotice] = useState('');
   const [showPlanOptions, setShowPlanOptions] = useState(false);
   const connectedRef = useRef(false);
-  const usage = readCredits(credits);
+  const insets = useSafeAreaInsets();
+  const initialInsets = initialWindowMetrics?.insets || {};
+  const rawTopInset = Math.max(insets.top || 0, initialInsets.top || 0, Constants.statusBarHeight || 0);
+  const topInset = Platform.OS === 'web'
+    ? 0
+    : rawTopInset;
+  const bottomInset = Platform.OS === 'web'
+    ? 0
+    : Math.max(insets.bottom || 0, initialInsets.bottom || 0);
   const subscription = readSubscription(credits);
   const hasPaidPlan = subscription.active;
   const activePlanName = PRODUCT_LABELS[subscription.productId] || '年卡';
   const planLabel = hasPaidPlan ? `Pro ${activePlanName}` : (subscription.expired ? '会员已过期' : '免费版');
   const expiresDateText = formatDate(subscription.expiresAt);
   const planMeta = hasPaidPlan
-    ? `${expiresDateText || '一年后'}到期 · 剩余 ${usage.total} 次识别`
+    ? `${expiresDateText || '一年后'}到期`
     : subscription.expired
       ? (expiresDateText ? `已于 ${expiresDateText} 到期` : '会员有效期已结束')
       : `v${appVersion} · 可开通年卡`;
   const welcomeDays = Number(benefits?.rewards?.welcome_days || 15);
-  const inviteDays = Number(benefits?.rewards?.invite_days || 15);
   const ownCode = benefits?.invite_code || '------';
   const claimed = Boolean(benefits?.welcome?.claimed);
   const redeemed = Boolean(benefits?.invite?.redeemed);
@@ -95,7 +131,12 @@ export default function PaywallScreen({
 
         InAppPurchases.setPurchaseListener(({ responseCode, results }) => {
           if (responseCode === InAppPurchases.IAPResponseCode.OK && results) {
-            for (const purchase of results) {
+            const purchases = Array.isArray(results) ? results.filter(isProcessablePurchase) : [];
+            if (!purchases.length) {
+              setLoading(false);
+              return;
+            }
+            for (const purchase of purchases) {
               handleReceiptValidation(purchase);
             }
           } else if (responseCode === InAppPurchases.IAPResponseCode.USER_CANCELED) {
@@ -168,18 +209,54 @@ export default function PaywallScreen({
     return item;
   }
 
+  async function findReceiptInHistory(productId) {
+    const { responseCode, results } = await InAppPurchases.getPurchaseHistoryAsync();
+    if (responseCode !== InAppPurchases.IAPResponseCode.OK) return null;
+
+    const purchases = Array.isArray(results) ? results.filter(isProcessablePurchase) : [];
+    const sameProduct = productId ? purchases.filter(p => p.productId === productId) : [];
+    const candidates = sameProduct.length ? sameProduct : purchases.filter(p => PRODUCT_IDS.includes(p.productId));
+    const match = candidates.find(p => readReceiptData(p));
+    return match ? { purchase: match, receiptData: readReceiptData(match) } : null;
+  }
+
   async function handleReceiptValidation(purchase) {
     try {
-      const receiptData = Platform.OS === 'ios' ? purchase.transactionReceipt : null;
-      if (!receiptData) return;
+      let receiptData = Platform.OS === 'ios' ? readReceiptData(purchase) : null;
+      let receiptPurchase = purchase;
+
+      if (!receiptData && Platform.OS === 'ios') {
+        console.warn('[iap] purchase missing receipt; checking history', purchaseDebugSummary(purchase));
+        try {
+          const history = await findReceiptInHistory(purchase?.productId);
+          if (history) {
+            receiptData = history.receiptData;
+            receiptPurchase = history.purchase;
+          }
+        } catch (err) {
+          console.warn('[iap] purchase history lookup failed:', err.message);
+        }
+      }
+
+      if (!receiptData) {
+        console.warn('[iap] receipt unavailable', purchaseDebugSummary(purchase));
+        Alert.alert('缺少购买凭证', 'App Store 没有返回 receipt，请点“恢复购买”重试；如果仍失败，需要安装最新 TestFlight 构建再测。');
+        return;
+      }
 
       const result = await requestJson('/user/add-credits', {
         apiUrl, token,
         method: 'POST',
-        body: { receiptData }
+        body: {
+          receiptData,
+          productId: receiptPurchase?.productId || purchase?.productId,
+          transactionId: receiptPurchase?.orderId || purchase?.orderId,
+          originalTransactionId: receiptPurchase?.originalOrderId || purchase?.originalOrderId
+        }
       });
 
-      await InAppPurchases.finishTransactionAsync(purchase, false);
+      const purchaseToFinish = purchase?.orderId ? purchase : receiptPurchase;
+      await InAppPurchases.finishTransactionAsync(purchaseToFinish, false);
       onPurchase?.(result);
       Alert.alert(result.alreadyProcessed ? '购买已恢复' : '开通成功', result.subscription?.expires_at ? `会员有效期至 ${formatDate(result.subscription.expires_at)}` : '一年会员权益已开通');
     } catch (err) {
@@ -234,8 +311,12 @@ export default function PaywallScreen({
       }
       if (!connectedRef.current) await connectToStore();
       const { results } = await InAppPurchases.getPurchaseHistoryAsync();
-      if (results?.length) {
-        await handleReceiptValidation(results[0]);
+      const purchases = Array.isArray(results) ? results.filter(isProcessablePurchase) : [];
+      const purchaseWithReceipt = purchases.find(p => PRODUCT_IDS.includes(p.productId) && readReceiptData(p))
+        || purchases.find(p => readReceiptData(p));
+      const purchase = purchaseWithReceipt || purchases.find(p => PRODUCT_IDS.includes(p.productId));
+      if (purchase) {
+        await handleReceiptValidation(purchase);
       } else {
         Alert.alert('无可恢复的购买');
       }
@@ -253,7 +334,7 @@ export default function PaywallScreen({
     try {
       const result = await onClaim?.();
       if (result?.granted === false) setNotice('你已经领取过新人会员');
-      else setNotice(`已领取 ${welcomeDays} 天会员`);
+      else setNotice(`已领取 ${welcomeDays} 天新人会员`);
     } catch (err) {
       Alert.alert('领取失败', err.message);
     } finally {
@@ -268,7 +349,7 @@ export default function PaywallScreen({
     try {
       await onRedeem?.(inputValue);
       setInviteCode('');
-      setNotice(`兑换成功，已加 ${inviteDays} 天会员`);
+      setNotice('兑换成功，邀请奖励已到账');
     } catch (err) {
       Alert.alert('兑换失败', err.message);
     } finally {
@@ -278,7 +359,7 @@ export default function PaywallScreen({
 
   async function handleShareCode() {
     if (!benefits?.invite_code) return;
-    const shareText = `我的放哪了邀请码：${ownCode}，填写后我们各得 ${inviteDays} 天会员`;
+    const shareText = `我的放哪了邀请码：${ownCode}，填写后我们各得额外奖励`;
     try {
       if (Platform.OS === 'web' && navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(ownCode);
@@ -344,7 +425,7 @@ export default function PaywallScreen({
   }
 
   return (
-    <SafeAreaView style={s.container}>
+    <View style={[s.container, { paddingTop: topInset, paddingBottom: bottomInset }]}>
       <View style={s.header}>
         <Text style={s.pageTitle}>我的</Text>
         <Pressable style={({ pressed }) => [s.closeBtn, pressed && s.pressed]} onPress={onClose} hitSlop={12}>
@@ -401,7 +482,7 @@ export default function PaywallScreen({
             </View>
             <View style={s.benefitRowCopy}>
               <Text style={s.benefitRowTitle}>{claimed ? '新人会员已领取' : '领取新人会员'}</Text>
-              <Text style={s.sectionMeta}>{claimed ? '权益已到账' : `可领取 ${welcomeDays} 天会员`}</Text>
+              <Text style={s.sectionMeta}>{claimed ? '会员权益已到账' : `可领取 ${welcomeDays} 天新人会员`}</Text>
             </View>
             <Pressable
               style={({ pressed }) => [
@@ -444,7 +525,7 @@ export default function PaywallScreen({
             </View>
             <View style={s.benefitRowCopy}>
               <Text style={s.benefitRowTitle}>{redeemed ? '邀请码已兑换' : '填写邀请码'}</Text>
-              <Text style={s.sectionMeta}>{redeemed ? '每个账号只能兑换一次' : `兑换后双方各得 ${inviteDays} 天会员`}</Text>
+              <Text style={s.sectionMeta}>{redeemed ? '每个账号只能兑换一次' : '兑换后双方各得额外奖励'}</Text>
               <View style={s.inputRow}>
                 <TextInput
                   value={inviteCode}
@@ -479,14 +560,14 @@ export default function PaywallScreen({
         </View>
 
       </ScrollView>
-    </SafeAreaView>
+    </View>
   );
 }
 
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   header: {
-    height: 56,
+    height: 42,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',

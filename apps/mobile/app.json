@@ -10,9 +10,9 @@
       "**/*"
     ],
     "ios": {
-      "supportsTablet": true,
+      "supportsTablet": false,
       "icon": "./assets/icon.png",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
         "NSCameraUsageDescription": "FindIt uses the camera to record where household items are stored.",
         "NSPhotoLibraryUsageDescription": "FindIt lets you choose photos to record where household items are stored.",
@@ -36,7 +36,8 @@
     },
     "owner": "zetacoler",
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-asset"
     ]
   }
 }

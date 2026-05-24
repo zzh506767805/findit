@@ -107,13 +107,21 @@ function appendUploadFile(formData, fileUriOrBlob, mimeType, index = 0) {
   }
 }
 
+function appendUploadFields(formData, fields = {}) {
+  for (const [key, value] of Object.entries(fields || {})) {
+    if (value === undefined || value === null || value === '') continue;
+    formData.append(key, String(value));
+  }
+}
+
 export function streamAgentUpload(apiUrl, token, path, fileUriOrBlob, mimeType, onEvent) {
   return streamAgentUploadBatch(apiUrl, token, path, [{ fileUriOrBlob, mimeType }], onEvent);
 }
 
-export function streamAgentUploadBatch(apiUrl, token, path, files, onEvent) {
+export function streamAgentUploadBatch(apiUrl, token, path, files, onEvent, fields = {}) {
   return new Promise(async (resolve, reject) => {
     const formData = new FormData();
+    appendUploadFields(formData, fields);
     files.forEach((file, index) => {
       appendUploadFile(formData, file.fileUriOrBlob, file.mimeType, index);
     });

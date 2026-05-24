@@ -169,7 +169,7 @@ export async function analyzePhoto({ imageBase64, mimeType, locationHint }) {
           role: 'user',
           content: [
             { type: 'input_text', text: userText },
-            { type: 'input_image', image_url: dataUrl }
+            { type: 'input_image', image_url: dataUrl, detail: 'high' }
           ]
         }
       ],

@@ -294,7 +294,7 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia 
     const options = {
       mediaTypes: ['images', 'videos'],
       videoMaxDuration: 10,
-      quality: 0.72,
+      quality: 1,
       allowsMultipleSelection: source !== 'camera'
     };
     const result = source === 'camera'
@@ -302,7 +302,7 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia 
       : await ImagePicker.launchImageLibraryAsync(options);
     if (result.canceled || !result.assets?.length) return;
 
-    onPickMedia(result.assets);
+    onPickMedia({ assets: result.assets, source });
   }
 
   const total = positions.reduce((n, p) => n + Number(p.item_count || 0), 0);

@@ -12,7 +12,9 @@ import {
   View
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as Clipboard from 'expo-clipboard';
 import Markdown from 'react-native-markdown-display';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { fullImageUrl, mediaPreviewUrl, requestJson } from '../api';
 import { streamAgent, streamAgentUploadBatch } from '../sse';
@@ -152,16 +154,54 @@ function localDateKey(date = new Date()) {
   return `${y}-${m}-${d}`;
 }
 
+const DRAFT_MEDIA_LIMIT = 12;
+
+function isVideoAsset(asset) {
+  return asset?.type === 'video' || asset?.uri?.match(/\.(mp4|mov|m4v)$/i);
+}
+
+function assetMimeType(asset) {
+  return isVideoAsset(asset) ? (asset?.mimeType || 'video/mp4') : (asset?.mimeType || 'image/jpeg');
+}
+
+function DraftMediaThumb({ item, onRemove }) {
+  const isVideo = isVideoAsset(item);
+  return (
+    <View style={s.draftThumbWrap}>
+      {isVideo ? (
+        <View style={[s.draftThumb, s.draftVideoThumb]}>
+          <AppIcon name="play-circle" size={22} color={colors.white} />
+        </View>
+      ) : (
+        <StableImage uri={item.uri} style={s.draftThumb} />
+      )}
+      <Pressable style={s.draftRemove} onPress={onRemove} hitSlop={6}>
+        <AppIcon name="x" size={12} color={colors.white} />
+      </Pressable>
+    </View>
+  );
+}
+
 export default function AssistantScreen({ session, onDataChanged, credits, isActive = true, onNeedCredits, onCreditsChanged, pendingMedia, onPendingMediaConsumed }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
+  const [draftMedia, setDraftMedia] = useState([]);
+  const [draftSpaceHint, setDraftSpaceHint] = useState('');
+  const [draftOrigin, setDraftOrigin] = useState('assistant');
   const [busy, setBusy] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(true);
   const scrollRef = useRef(null);
   const pendingBottomScrollRef = useRef(false);
   const loadedHistoryKeyRef = useRef(null);
+  const copyTimerRef = useRef(null);
+  const [copiedAgentKey, setCopiedAgentKey] = useState(null);
+  const insets = useSafeAreaInsets();
   const creditTotal = Number(credits?.total ?? ((credits?.free || 0) + (credits?.paid || 0)));
   const todayKey = localDateKey();
+
+  useEffect(() => () => {
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+  }, []);
 
   useEffect(() => {
     if (!session.token) {
@@ -202,15 +242,71 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     scrollEnd(false);
   }, [isActive, loadingHistory, messages.length]);
 
+  function appendDraftMedia(assets, { spaceHint = '', origin = 'assistant' } = {}) {
+    if (!assets?.length) return;
+    const hadDraft = draftMedia.length > 0;
+    const available = Math.max(0, DRAFT_MEDIA_LIMIT - draftMedia.length);
+    if (available <= 0) {
+      Alert.alert('最多可添加 12 个媒体');
+      return;
+    }
+    const selected = assets.slice(0, available).map((asset, index) => ({
+      ...asset,
+      draftId: `${Date.now()}_${index}_${Math.random().toString(36).slice(2)}`
+    }));
+    if (assets.length > available) Alert.alert('已添加前 12 个媒体');
+    if (!hadDraft) {
+      setDraftOrigin(origin);
+      setDraftSpaceHint(spaceHint || '');
+    } else if (spaceHint && !draftSpaceHint) {
+      setDraftSpaceHint(spaceHint);
+    }
+    setDraftMedia((prev) => [...prev, ...selected]);
+  }
+
+  function removeDraftMedia(draftId) {
+    setDraftMedia((prev) => {
+      const next = prev.filter((item) => item.draftId !== draftId);
+      if (!next.length) {
+        setDraftSpaceHint('');
+        setDraftOrigin('assistant');
+      }
+      return next;
+    });
+  }
+
+  function clearDraftMedia() {
+    setDraftMedia([]);
+    setDraftSpaceHint('');
+    setDraftOrigin('assistant');
+  }
+
+  async function handlePickedMedia(assets, { source = 'library', spaceHint = '', origin = 'assistant' } = {}) {
+    if (!assets?.length) return;
+
+    if (source === 'library' && draftMedia.length === 0) {
+      if (credits && creditTotal <= 0) {
+        onNeedCredits?.();
+        return;
+      }
+      const q = input.trim();
+      setInput('');
+      await sendMediaAssets(assets, spaceHint, origin, q);
+      return;
+    }
+
+    appendDraftMedia(assets, { spaceHint, origin });
+  }
+
   // Handle pending media from Spaces page
   useEffect(() => {
     if (!isActive || !pendingMedia || busy || loadingHistory) return;
-    const { assets, spaceHint } = pendingMedia;
+    const { assets, spaceHint, source = 'library' } = pendingMedia;
     onPendingMediaConsumed?.();
-    if (assets?.length) sendMediaAssets(assets, spaceHint, 'spaces');
+    if (assets?.length) handlePickedMedia(assets, { source, spaceHint, origin: 'spaces' });
   }, [isActive, pendingMedia, busy, loadingHistory]);
 
-  async function sendMediaAssets(assets, spaceHint, origin = 'assistant') {
+  async function sendMediaAssets(assets, spaceHint, origin = 'assistant', queryText = '') {
     if (!assets?.length) return;
     if (credits && creditTotal <= 0) {
       onNeedCredits?.();
@@ -219,8 +315,8 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     setBusy(true);
     const batchId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const prepared = assets.map((asset, index) => {
-      const isVideo = asset.type === 'video' || asset.uri?.match(/\.(mp4|mov|m4v)$/i);
-      const mimeType = isVideo ? (asset.mimeType || 'video/mp4') : (asset.mimeType || 'image/jpeg');
+      const isVideo = isVideoAsset(asset);
+      const mimeType = assetMimeType(asset);
       return {
         asset,
         index,
@@ -230,6 +326,8 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
       };
     });
 
+    const text = String(queryText || '').trim();
+    if (text) addMsg({ role: 'user', type: 'text', text });
     for (const item of prepared) {
       addMsg({
         role: 'user',
@@ -262,7 +360,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         patchUserMedia(batchId, uploadIndex, (m) => ({
           ...m,
           uri: mediaUri || m.uri,
-          previewUri: previewUri || m.previewUri,
+          previewUri: preparedItem?.isVideo ? (previewUri || m.previewUri) : m.previewUri,
           thumbnailUri: thumbnailUri || m.thumbnailUri,
           contentType: e.content_type || m.contentType,
           mediaAssetId: e.media_asset_id
@@ -288,7 +386,14 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         }
         uploadFiles.push({ fileUriOrBlob: fileData, mimeType: item.mimeType });
       }
-      await streamAgentUploadBatch(session.apiUrl, session.token, uploadPath, uploadFiles, handleEvent);
+      await streamAgentUploadBatch(
+        session.apiUrl,
+        session.token,
+        uploadPath,
+        uploadFiles,
+        handleEvent,
+        text ? { query: text } : {}
+      );
       onCreditsChanged?.();
     } catch (err) {
       if (err.message?.includes('已用完')) {
@@ -358,10 +463,10 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     if (!perm.granted) { Alert.alert('需要权限'); return; }
 
     const options = mediaType === 'video'
-      ? { mediaTypes: ['videos'], videoMaxDuration: 10, quality: 0.7 }
+      ? { mediaTypes: ['videos'], videoMaxDuration: 10, quality: 1 }
       : mediaType === 'image'
-        ? { mediaTypes: ['images'], quality: 0.72 }
-        : { mediaTypes: ['images', 'videos'], videoMaxDuration: 10, quality: 0.72 };
+        ? { mediaTypes: ['images'], quality: 1 }
+        : { mediaTypes: ['images', 'videos'], videoMaxDuration: 10, quality: 1 };
     if (source !== 'camera') options.allowsMultipleSelection = true;
 
     const result = source === 'camera'
@@ -369,7 +474,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
       : await ImagePicker.launchImageLibraryAsync(options);
     if (result.canceled || !result.assets?.length) return;
 
-    await sendMediaAssets(result.assets);
+    await handlePickedMedia(result.assets, { source });
   }
 
   async function sendQuery() {
@@ -396,6 +501,27 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     } finally { setBusy(false); }
   }
 
+  async function sendComposer() {
+    const q = input.trim();
+    if (busy || (!q && draftMedia.length === 0)) return;
+
+    if (draftMedia.length > 0) {
+      if (credits && creditTotal <= 0) {
+        onNeedCredits?.();
+        return;
+      }
+      const assets = draftMedia;
+      const spaceHint = draftSpaceHint;
+      const origin = draftOrigin;
+      setInput('');
+      clearDraftMedia();
+      await sendMediaAssets(assets, spaceHint, origin, q);
+      return;
+    }
+
+    await sendQuery();
+  }
+
   async function confirmSuggestion(idx, editedSuggestion) {
     const msg = messages[idx];
     const finalSuggestion = editedSuggestion || msg?.suggestion;
@@ -417,6 +543,28 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
   if (!isActive) {
     return <View style={s.container} />;
   }
+
+  async function copyAgentAnswer(text, key) {
+    const value = String(text || '').trim();
+    if (!value) return;
+    try {
+      await Clipboard.setStringAsync(value);
+      setCopiedAgentKey(key);
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = setTimeout(() => {
+        setCopiedAgentKey((current) => current === key ? null : current);
+        copyTimerRef.current = null;
+      }, 1300);
+    } catch {
+      Alert.alert('复制失败', '请稍后再试');
+    }
+  }
+
+  const canSend = Boolean(input.trim() || draftMedia.length) && !busy;
+  const bottomInset = Platform.OS === 'web' ? 0 : insets.bottom;
+  const dockInsetStyle = bottomInset
+    ? { marginBottom: -bottomInset, paddingBottom: bottomInset + 6 }
+    : null;
 
   return (
     <View style={s.container}>
@@ -467,6 +615,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
             );
           }
           if (msg.role === 'agent') {
+            const copyKey = msg.messageId || i;
             return (
               <View key={i} style={s.agentRow}>
                 {msg.steps?.length > 0 ? <AgentWorkflow steps={msg.steps} apiUrl={session.apiUrl} /> : null}
@@ -474,9 +623,18 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                   <View style={s.agentLoading}><TypingDots /></View>
                 ) : null}
                 {msg.answer ? (
-                  <View style={s.agentAnswer}>
+                  <Pressable
+                    style={({ pressed }) => [s.agentAnswer, pressed && s.agentAnswerPressed]}
+                    onLongPress={() => copyAgentAnswer(msg.answer, copyKey)}
+                    delayLongPress={350}>
                     <Markdown style={mdStyles}>{msg.answer}</Markdown>
-                  </View>
+                    {copiedAgentKey === copyKey ? (
+                      <View style={s.copyHint}>
+                        <AppIcon name="check" size={12} color={colors.green} />
+                        <Text style={s.copyHintText}>已复制</Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
                 ) : null}
                 {msg.suggestion && !msg.confirmed ? (
                   <SuggestionCard suggestion={msg.suggestion}
@@ -496,31 +654,61 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         })}
       </ScrollView>
 
-        <View style={s.dock}>
-          <Pressable style={({ pressed }) => [s.camBtn, pressed && s.pressed]}
-            onPress={() => {
-              if (Platform.OS === 'web') {
-                pickMedia('library');
-              } else {
-                Alert.alert('记录方式', '', [
-                  { text: '拍照', onPress: () => pickMedia('camera', 'image') },
-                  { text: '录像', onPress: () => pickMedia('camera', 'video') },
-                  { text: '从相册选', onPress: () => pickMedia('library') },
-                  { text: '取消', style: 'cancel' }
-                ]);
-              }
-            }} disabled={busy}>
-            <AppIcon name="camera" size={20} color={colors.white} />
-          </Pressable>
-          <View style={s.inputWrap}>
-            <TextInput style={s.input} value={input} onChangeText={setInput}
-              placeholder="帮我找..." placeholderTextColor={colors.textDim}
-              returnKeyType="send" onSubmitEditing={sendQuery} editable={!busy} />
+        <View style={[s.dock, dockInsetStyle]}>
+          {draftMedia.length > 0 ? (
+            <View style={s.draftTray}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}
+                contentContainerStyle={s.draftList} keyboardShouldPersistTaps="handled">
+                {draftMedia.map((item) => (
+                  <DraftMediaThumb key={item.draftId} item={item} onRemove={() => removeDraftMedia(item.draftId)} />
+                ))}
+                {Platform.OS !== 'web' ? (
+                  <Pressable style={({ pressed }) => [s.draftAddTile, pressed && s.pressed]}
+                    onPress={() => pickMedia('camera', 'image')} disabled={busy}>
+                    <AppIcon name="camera" size={16} color={colors.textSecondary} />
+                    <Text style={s.draftAddText}>继续拍</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable style={({ pressed }) => [s.draftAddTile, pressed && s.pressed]}
+                  onPress={() => pickMedia('library')} disabled={busy}>
+                  <AppIcon name="image" size={16} color={colors.textSecondary} />
+                  <Text style={s.draftAddText}>相册</Text>
+                </Pressable>
+              </ScrollView>
+            </View>
+          ) : null}
+          <View style={s.dockRow}>
+            <Pressable style={({ pressed }) => [s.camBtn, pressed && s.pressed]}
+              onPress={() => {
+                if (Platform.OS === 'web') {
+                  pickMedia('library');
+                } else {
+                  Alert.alert('记录方式', '', [
+                    { text: '拍照', onPress: () => pickMedia('camera', 'image') },
+                    { text: '录像', onPress: () => pickMedia('camera', 'video') },
+                    { text: '从相册选', onPress: () => pickMedia('library') },
+                    { text: '取消', style: 'cancel' }
+                  ]);
+                }
+              }} disabled={busy}>
+              <AppIcon name="camera" size={20} color={colors.white} />
+            </Pressable>
+            <View style={s.inputWrap}>
+              <TextInput style={s.input} value={input} onChangeText={setInput}
+                placeholder={draftMedia.length ? '添加说明...' : '帮我找...'} placeholderTextColor={colors.textDim}
+                returnKeyType="send" onSubmitEditing={sendComposer} editable={!busy} />
+            </View>
+            {draftMedia.length > 0 ? (
+              <Pressable style={({ pressed }) => [s.clearBtn, pressed && s.pressed]}
+                onPress={clearDraftMedia} disabled={busy}>
+                <AppIcon name="trash-2" size={17} color={colors.textSecondary} />
+              </Pressable>
+            ) : null}
+            <Pressable style={({ pressed }) => [s.sendBtn, pressed && s.pressed, !canSend && s.disabled]}
+              onPress={sendComposer} disabled={!canSend}>
+              <AppIcon name="arrow-up" size={18} color={colors.white} />
+            </Pressable>
           </View>
-          <Pressable style={({ pressed }) => [s.sendBtn, pressed && s.pressed, (!input.trim() || busy) && s.disabled]}
-            onPress={sendQuery} disabled={!input.trim() || busy}>
-            <AppIcon name="arrow-up" size={18} color={colors.white} />
-          </Pressable>
         </View>
     </View>
   );
@@ -581,6 +769,19 @@ const s = StyleSheet.create({
   agentAnswer: {
     paddingVertical: 4
   },
+  agentAnswerPressed: { opacity: 0.76 },
+  copyHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    alignSelf: 'flex-start',
+    marginTop: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.full,
+    backgroundColor: colors.bgInput
+  },
+  copyHintText: { color: colors.green, fontSize: 12, fontWeight: '700' },
   typingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 },
   typingLabel: { color: colors.textTertiary, fontSize: 14 },
   typingDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.textTertiary },
@@ -592,18 +793,40 @@ const s = StyleSheet.create({
   confirmed: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6 },
   confirmedText: { color: colors.green, fontSize: 14, fontWeight: '700' },
   dock: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 14, paddingVertical: 10,
+    paddingHorizontal: 14, paddingTop: 10, paddingBottom: 6,
     backgroundColor: colors.bgRaised,
     borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line,
     ...shadows.dock
   },
+  dockRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  draftTray: { marginBottom: 9 },
+  draftList: { gap: 8, alignItems: 'center', paddingRight: 2 },
+  draftThumbWrap: {
+    width: 58, height: 58, borderRadius: radius.sm,
+    backgroundColor: colors.bgInput, overflow: 'hidden'
+  },
+  draftThumb: { width: 58, height: 58, borderRadius: radius.sm, backgroundColor: colors.bgInput },
+  draftVideoThumb: { alignItems: 'center', justifyContent: 'center', backgroundColor: colors.textDim },
+  draftRemove: {
+    position: 'absolute', top: 4, right: 4,
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: 'rgba(26,26,26,0.62)',
+    alignItems: 'center', justifyContent: 'center'
+  },
+  draftAddTile: {
+    width: 62, height: 58, borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.lineStrong,
+    backgroundColor: colors.bgCard,
+    alignItems: 'center', justifyContent: 'center', gap: 4
+  },
+  draftAddText: { color: colors.textSecondary, fontSize: 11, fontWeight: '700' },
   camBtn: { width: 44, height: 44, borderRadius: 22, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
   inputWrap: {
     flex: 1, minHeight: 44, borderRadius: radius.full,
     backgroundColor: colors.bgInput, justifyContent: 'center', paddingHorizontal: 16
   },
   input: { color: colors.text, fontSize: 15, paddingVertical: 0 },
+  clearBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.bgInput, alignItems: 'center', justifyContent: 'center' },
   sendBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' },
   pressed: { opacity: 0.7 },
   disabled: { opacity: 0.3 }

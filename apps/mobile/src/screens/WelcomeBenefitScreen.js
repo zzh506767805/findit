@@ -21,7 +21,6 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
   const [notice, setNotice] = useState('');
 
   const welcomeDays = Number(benefits?.rewards?.welcome_days || 15);
-  const inviteDays = Number(benefits?.rewards?.invite_days || 15);
   const ownCode = benefits?.invite_code || '------';
   const claimed = Boolean(benefits?.welcome?.claimed);
   const redeemed = Boolean(benefits?.invite?.redeemed);
@@ -34,7 +33,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
     try {
       const result = await onClaim?.();
       if (result?.granted === false) setNotice('你已经领取过新人会员');
-      else setNotice(`已领取 ${welcomeDays} 天会员`);
+      else setNotice(`已领取 ${welcomeDays} 天新人会员`);
     } catch (err) {
       Alert.alert('领取失败', err.message);
     } finally {
@@ -49,7 +48,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
     try {
       await onRedeem?.(inputValue);
       setInviteCode('');
-      setNotice(`兑换成功，已加 ${inviteDays} 天会员`);
+      setNotice('兑换成功，邀请奖励已到账');
     } catch (err) {
       Alert.alert('兑换失败', err.message);
     } finally {
@@ -59,7 +58,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
 
   async function handleShareCode() {
     if (!benefits?.invite_code) return;
-    const shareText = `我的放哪了邀请码：${ownCode}，填写后我们各得 ${inviteDays} 天会员`;
+    const shareText = `我的放哪了邀请码：${ownCode}，填写后我们各得额外奖励`;
     try {
       if (Platform.OS === 'web' && navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(ownCode);
@@ -94,7 +93,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
             <Feather name="gift" size={22} color={colors.white} />
           </View>
           <Text style={s.title}>领取新人会员</Text>
-          <Text style={s.subtitle}>先拿体验权益，再填写邀请码拿额外奖励。</Text>
+          <Text style={s.subtitle}>先拿会员体验，再填写邀请码拿额外奖励。</Text>
         </View>
 
         <View style={s.benefitCard}>
@@ -104,7 +103,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
             </View>
             <View style={s.benefitRowCopy}>
               <Text style={s.benefitRowTitle}>{claimed ? '新人会员已领取' : '领取新人会员'}</Text>
-              <Text style={s.sectionMeta}>{claimed ? '权益已到账，可以继续使用。' : `送你 ${welcomeDays} 天会员`}</Text>
+              <Text style={s.sectionMeta}>{claimed ? '会员权益已到账。' : `送你 ${welcomeDays} 天新人会员`}</Text>
             </View>
             <Pressable
               style={({ pressed }) => [
@@ -144,7 +143,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
             </View>
             <View style={s.benefitRowCopy}>
               <Text style={s.benefitRowTitle}>{redeemed ? '邀请码已兑换' : '填写邀请码'}</Text>
-              <Text style={s.sectionMeta}>{redeemed ? '每个账号只能兑换一次。' : `兑换后双方各得 ${inviteDays} 天会员`}</Text>
+              <Text style={s.sectionMeta}>{redeemed ? '每个账号只能兑换一次。' : '兑换后双方各得额外奖励'}</Text>
               <View style={s.inputRow}>
                 <TextInput
                   value={inviteCode}

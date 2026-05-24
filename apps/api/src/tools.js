@@ -1,4 +1,4 @@
-import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, searchItems, updateItem, deleteItem } from './store.js';
+import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, getLatestMediaAssetForPosition, searchItems, updateItem, deleteItem } from './store.js';
 
 export const toolDefinitions = [
   {
@@ -10,7 +10,7 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'list_positions',
-    description: '列出某个空间下所有位置（家具/区域），返回每个位置的名称、物品数量和最近照片ID。',
+    description: '列出某个空间下所有位置（家具/区域）。返回 position_id、物品数量、latest_photo_id。latest_photo_id 是照片ID，可传给 view_photo；position_id 只能传给 get_position_items 或 view_position_photo。',
     parameters: {
       type: 'object',
       properties: { space_name: { type: 'string', description: '空间名称，如"卧室"' } },
@@ -20,7 +20,7 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'get_position_items',
-    description: '获取某个位置已记录的所有物品，包含最近照片ID。',
+    description: '获取某个位置已记录的所有物品。参数必须是 position_id。返回的 latest_photo_id 或物品 media_asset_id 才是照片ID，可传给 view_photo。',
     parameters: {
       type: 'object',
       properties: { position_id: { type: 'string' } },
@@ -30,7 +30,7 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'view_photo',
-    description: '查看一张历史照片。用于对比新旧照片或为查找结果提供视觉证据。',
+    description: '查看一张历史照片。media_asset_id 必须是照片/媒体资产ID，来自 latest_photo_id 或 search_items/get_position_items 返回的 media_asset_id。不要传 position_id；如果只有 position_id，请改用 view_position_photo。',
     parameters: {
       type: 'object',
       properties: {
@@ -38,6 +38,19 @@ export const toolDefinitions = [
         question: { type: 'string', description: '查看照片时想确认的问题（可选）' }
       },
       required: ['media_asset_id']
+    }
+  },
+  {
+    type: 'function',
+    name: 'view_position_photo',
+    description: '查看某个位置最近一张历史照片。用于拍照识别时对比同一位置的新旧照片，或查找时查看某个位置的视觉证据。参数必须是 position_id，不需要照片ID。',
+    parameters: {
+      type: 'object',
+      properties: {
+        position_id: { type: 'string', description: '位置ID，来自当前家庭数据或 list_positions 返回的 position_id' },
+        question: { type: 'string', description: '查看照片时想确认的问题（可选）' }
+      },
+      required: ['position_id']
     }
   },
   {
@@ -114,6 +127,23 @@ export const toolDefinitions = [
 ];
 
 export async function executeTool(toolName, args, userId, uploadDir) {
+  function formatMediaView(asset, question, extra = {}) {
+    const isVideo = asset.content_type?.startsWith('video/');
+    const viewUrl = isVideo ? asset.thumbnail_url : asset.blob_url;
+    if (!viewUrl) return { error: '这段视频还没有可查看的预览图' };
+    return {
+      type: isVideo ? 'video_preview' : 'image',
+      media_asset_id: asset.id,
+      blob_url: viewUrl,
+      thumbnail_url: asset.thumbnail_url,
+      preview_url: asset.thumbnail_url || viewUrl,
+      original_blob_url: asset.blob_url,
+      content_type: asset.content_type,
+      question,
+      ...extra
+    };
+  }
+
   switch (toolName) {
     case 'list_spaces':
       return await getSpacesList(userId);
@@ -124,28 +154,32 @@ export async function executeTool(toolName, args, userId, uploadDir) {
       if (!positions.length && !(await getSpaceByName(userId, spaceName))) {
         return { error: `没有找到空间"${spaceName}"` };
       }
-      return positions;
+      return positions.map((p) => ({ ...p, position_id: p.position_id || p.id }));
     }
 
     case 'get_position_items':
       return await getPositionItems(userId, args.position_id);
 
     case 'view_photo': {
-      const asset = await getMediaAsset(userId, args.media_asset_id);
-      if (!asset) return { error: '照片不存在' };
-      const isVideo = asset.content_type?.startsWith('video/');
-      const viewUrl = isVideo ? asset.thumbnail_url : asset.blob_url;
-      if (!viewUrl) return { error: '这段视频还没有可查看的预览图' };
-      return {
-        type: isVideo ? 'video_preview' : 'image',
-        media_asset_id: asset.id,
-        blob_url: viewUrl,
-        thumbnail_url: asset.thumbnail_url,
-        preview_url: asset.thumbnail_url || viewUrl,
-        original_blob_url: asset.blob_url,
-        content_type: asset.content_type,
-        question: args.question
-      };
+      const requestedId = args.media_asset_id;
+      const asset = await getMediaAsset(userId, requestedId);
+      if (asset) return formatMediaView(asset, args.question);
+
+      const latestForPosition = await getLatestMediaAssetForPosition(userId, requestedId);
+      if (latestForPosition) {
+        return formatMediaView(latestForPosition, args.question, {
+          resolved_from: 'position_id',
+          position_id: requestedId
+        });
+      }
+      return { error: '照片不存在；如果你只有 position_id，请使用 view_position_photo。' };
+    }
+
+    case 'view_position_photo': {
+      const positionId = args.position_id;
+      const asset = await getLatestMediaAssetForPosition(userId, positionId);
+      if (!asset) return { error: '这个位置还没有历史照片', position_id: positionId };
+      return formatMediaView(asset, args.question, { position_id: positionId });
     }
 
     case 'search_items': {

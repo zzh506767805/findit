@@ -11,6 +11,7 @@ const TOOL_LABELS = {
   list_positions: { icon: 'map-pin', label: '查看位置' },
   get_position_items: { icon: 'list', label: '查看物品' },
   view_photo: { icon: 'image', label: '查看照片' },
+  view_position_photo: { icon: 'image', label: '查看位置照片' },
   search_items: { icon: 'search', label: '搜索物品' },
   save_items: { icon: 'save', label: '整理数据' },
   suggest_save: { icon: 'save', label: '整理数据' },
@@ -38,7 +39,7 @@ function formatToolResult(tool, result) {
     return `${(result.items || []).length} 件物品`;
   }
   if (tool === 'search_items') return `找到 ${result.count || 0} 条记录`;
-  if (tool === 'view_photo') return '已查看';
+  if (tool === 'view_photo' || tool === 'view_position_photo') return '已查看';
   if (tool === 'save_items') return '已整理成记录草稿';
   return null;
 }
@@ -73,9 +74,10 @@ export default function AgentWorkflow({ steps = [], apiUrl }) {
         }
         if (step.type === 'tool_result') {
           const summary = formatToolResult(step.tool, step.result);
-          const photoPath = step.result?.preview_url || step.result?.thumbnail_url || step.result?.blob_url;
+          const showPhotoPreview = step.tool !== 'view_position_photo';
+          const photoPath = showPhotoPreview ? (step.result?.preview_url || step.result?.thumbnail_url || step.result?.blob_url) : null;
           const directPhotoUrl = photoPath ? fullImageUrl(apiUrl, photoPath) : null;
-          const routePhotoUrl = step.result?.media_asset_id
+          const routePhotoUrl = showPhotoPreview && step.result?.media_asset_id
             ? mediaPreviewUrl(apiUrl, step.result.media_asset_id, Boolean(step.result?.thumbnail_url))
             : null;
           const photoUrl = directPhotoUrl || routePhotoUrl;
