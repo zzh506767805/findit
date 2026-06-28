@@ -12,7 +12,7 @@
     "ios": {
       "supportsTablet": false,
       "icon": "./assets/icon.png",
-      "buildNumber": "5",
+      "buildNumber": "6",
       "infoPlist": {
         "NSCameraUsageDescription": "FindIt uses the camera to record where household items are stored.",
         "NSPhotoLibraryUsageDescription": "FindIt lets you choose photos to record where household items are stored.",

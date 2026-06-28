@@ -14,6 +14,7 @@ const PRODUCTS = [
 ];
 const PRODUCT_IDS = PRODUCTS.map(p => p.id);
 const FINISH_TRANSACTION_TIMEOUT_MS = 4000;
+const PURCHASE_HISTORY_FALLBACK_DELAYS_MS = [700, 1600, 3200];
 
 const PRODUCT_LABELS = {
   welcome_trial: '新人会员',
@@ -79,6 +80,18 @@ function withTimeout(promise, ms, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function purchaseReceiptKey(purchase, receiptData) {
+  const productId = purchase?.productId || 'unknown';
+  const orderId = purchase?.orderId || purchase?.transactionId || null;
+  const originalOrderId = purchase?.originalOrderId || purchase?.originalTransactionId || null;
+  if (orderId || originalOrderId) return `${productId}:${orderId || originalOrderId}`;
+  return `${productId}:${String(receiptData || '').slice(-96)}`;
+}
+
 export default function PaywallScreen({
   credits,
   apiUrl,
@@ -100,6 +113,8 @@ export default function PaywallScreen({
   const [notice, setNotice] = useState('');
   const [showPlanOptions, setShowPlanOptions] = useState(false);
   const connectedRef = useRef(false);
+  const purchaseFlowRef = useRef({ productId: null, handled: false, canceled: false });
+  const processedPurchaseKeysRef = useRef(new Set());
   const insets = useSafeAreaInsets();
   const initialInsets = initialWindowMetrics?.insets || {};
   const rawTopInset = Math.max(insets.top || 0, initialInsets.top || 0, Constants.statusBarHeight || 0);
@@ -146,14 +161,17 @@ export default function PaywallScreen({
               return;
             }
             for (const purchase of purchases) {
-              handleReceiptValidation(purchase);
+              handleReceiptValidation(purchase, { showMissingReceiptAlert: false });
             }
           } else if (responseCode === InAppPurchases.IAPResponseCode.USER_CANCELED) {
+            purchaseFlowRef.current.canceled = true;
             setLoading(false);
           } else if (responseCode === InAppPurchases.IAPResponseCode.DEFERRED) {
+            purchaseFlowRef.current.canceled = true;
             setLoading(false);
             Alert.alert('购买待批准', 'App Store 已收到请求，等待批准后会自动生效。');
           } else {
+            purchaseFlowRef.current.canceled = true;
             setLoading(false);
             Alert.alert('购买失败', 'App Store 暂时无法完成购买，请稍后再试。');
           }
@@ -229,7 +247,8 @@ export default function PaywallScreen({
     return match ? { purchase: match, receiptData: readReceiptData(match) } : null;
   }
 
-  async function handleReceiptValidation(purchase) {
+  async function handleReceiptValidation(purchase, { showMissingReceiptAlert = true } = {}) {
+    let purchaseKey = null;
     try {
       let receiptData = Platform.OS === 'ios' ? readReceiptData(purchase) : null;
       let receiptPurchase = purchase;
@@ -249,10 +268,16 @@ export default function PaywallScreen({
 
       if (!receiptData) {
         console.warn('[iap] receipt unavailable', purchaseDebugSummary(purchase));
-        Alert.alert('缺少购买凭证', 'App Store 没有返回 receipt，请点“恢复购买”重试；如果仍失败，需要安装最新 TestFlight 构建再测。');
+        if (showMissingReceiptAlert) {
+          Alert.alert('缺少购买凭证', 'App Store 没有返回 receipt，请点“恢复购买”重试；如果仍失败，需要安装最新 TestFlight 构建再测。');
+        }
         setLoading(false);
         return;
       }
+
+      purchaseKey = purchaseReceiptKey(receiptPurchase, receiptData);
+      if (processedPurchaseKeysRef.current.has(purchaseKey)) return;
+      processedPurchaseKeysRef.current.add(purchaseKey);
 
       const result = await requestJson('/user/add-credits', {
         apiUrl, token,
@@ -266,13 +291,37 @@ export default function PaywallScreen({
       });
 
       const purchaseToFinish = purchase?.orderId ? purchase : receiptPurchase;
+      purchaseFlowRef.current.handled = true;
       setLoading(false);
       await onPurchase?.(result);
       Alert.alert(result.alreadyProcessed ? '购买已恢复' : '开通成功', result.subscription?.expires_at ? `会员有效期至 ${formatDate(result.subscription.expires_at)}` : '一年会员权益已开通');
       finishTransactionAfterUnlock(purchaseToFinish);
     } catch (err) {
+      if (purchaseKey) processedPurchaseKeysRef.current.delete(purchaseKey);
       Alert.alert('验证失败', err.message);
       setLoading(false);
+    }
+  }
+
+  async function validatePurchaseFromHistoryAfterStoreReturn(productId) {
+    for (const waitMs of PURCHASE_HISTORY_FALLBACK_DELAYS_MS) {
+      await delay(waitMs);
+      if (purchaseFlowRef.current.handled || purchaseFlowRef.current.canceled) return;
+
+      try {
+        const history = await findReceiptInHistory(productId);
+        if (history?.purchase) {
+          await handleReceiptValidation(history.purchase);
+          return;
+        }
+      } catch (err) {
+        console.warn('[iap] purchase fallback history lookup failed:', err.message);
+      }
+    }
+
+    if (!purchaseFlowRef.current.handled && !purchaseFlowRef.current.canceled) {
+      setLoading(false);
+      Alert.alert('购买待确认', 'App Store 已完成支付，但购买凭证还没同步。请点“恢复购买”刷新会员状态。');
     }
   }
 
@@ -311,7 +360,11 @@ export default function PaywallScreen({
         return;
       }
 
+      purchaseFlowRef.current = { productId: product.id, handled: false, canceled: false };
       await InAppPurchases.purchaseItemAsync(product.id);
+      validatePurchaseFromHistoryAfterStoreReturn(product.id).catch((err) => {
+        console.warn('[iap] purchase fallback failed:', err.message);
+      });
     } catch (err) {
       setLoading(false);
       const message = String(err?.message || '');
