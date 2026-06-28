@@ -229,10 +229,10 @@ export default function App() {
     return result;
   }
 
-  async function handlePaywallPurchase(nextCredits) {
+  function handlePaywallPurchase(nextCredits) {
     if (nextCredits && typeof nextCredits === 'object') setCredits(nextCredits);
-    else await refreshCredits();
     setShowPaywall(false);
+    refreshCredits();
   }
 
   function switchTab(next) {

@@ -49,6 +49,7 @@ async function loadEnvFile() {
 await loadEnvFile();
 
 const PORT = Number(process.env.PORT || 4000);
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 function corsHeaders() {
   return {
@@ -62,7 +63,7 @@ function corsHeaders() {
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
-  if (process.env.NODE_ENV === 'production') {
+  if (IS_PRODUCTION) {
     console.error('FATAL: JWT_SECRET must be set in production');
     process.exit(1);
   }
@@ -148,6 +149,11 @@ const APPLE_VERIFY_URL = 'https://buy.itunes.apple.com/verifyReceipt';
 const APPLE_SANDBOX_VERIFY_URL = 'https://sandbox.itunes.apple.com/verifyReceipt';
 const IAP_SHARED_SECRET = process.env.APPLE_IAP_SHARED_SECRET || '';
 
+if (IS_PRODUCTION && !IAP_SHARED_SECRET) {
+  console.error('FATAL: APPLE_IAP_SHARED_SECRET must be set in production');
+  process.exit(1);
+}
+
 const ANNUAL_PRODUCTS = {
   fangnale_yearly: { credits: 1000, label: '标准年卡' },
   fangnale_yearly_large: { credits: 3000, label: '大户型年卡' }
@@ -158,6 +164,16 @@ const PRODUCT_CREDITS = Object.fromEntries([
   ...Object.entries(LEGACY_PRODUCT_CREDITS)
 ]);
 const IAP_PRODUCT_IDS = new Set(Object.keys(PRODUCT_CREDITS));
+
+function getRuntimeConfigStatus() {
+  return {
+    nodeEnv: process.env.NODE_ENV || null,
+    isProduction: IS_PRODUCTION,
+    hasJwtSecret: Boolean(JWT_SECRET),
+    hasIapSharedSecret: Boolean(IAP_SHARED_SECRET),
+    appleBundleId: APPLE_BUNDLE_ID
+  };
+}
 
 function receiptTimestamp(item) {
   return Number(item?.expires_date_ms || item?.purchase_date_ms || item?.original_purchase_date_ms || 0);
@@ -599,7 +615,12 @@ async function route(req, res) {
   }
 
   if (method === 'GET' && url.pathname === '/health') {
-    return sendJson(res, 200, { ok: true, time: nowIso(), azure: getAzureConfigStatus() });
+    return sendJson(res, 200, {
+      ok: true,
+      time: nowIso(),
+      azure: getAzureConfigStatus(),
+      runtime: getRuntimeConfigStatus()
+    });
   }
 
   if (method === 'GET' && url.pathname.startsWith('/uploads/')) {
@@ -648,7 +669,7 @@ async function route(req, res) {
   }
 
   if (method === 'POST' && url.pathname === '/auth/login') {
-    if (process.env.NODE_ENV === 'production') {
+    if (IS_PRODUCTION) {
       return sendJson(res, 404, { error: 'Not found' });
     }
     const body = await readJson(req);
@@ -671,12 +692,12 @@ async function route(req, res) {
           return sendJson(res, 401, { error: 'Token subject mismatch' });
         }
       } catch (err) {
-        if (process.env.NODE_ENV === 'production') {
+        if (IS_PRODUCTION) {
           return sendJson(res, 401, { error: `Apple token verification failed: ${err.message}` });
         }
         console.warn('[auth] Apple token verification skipped in dev:', err.message);
       }
-    } else if (process.env.NODE_ENV === 'production') {
+    } else if (IS_PRODUCTION) {
       return sendJson(res, 400, { error: 'identityToken is required' });
     }
 
@@ -714,7 +735,7 @@ async function route(req, res) {
     const body = await readJson(req);
 
     // 开发模式：按前端传入的产品模拟开通年卡；保留 amount 兜底给本地调试。
-    if (process.env.NODE_ENV === 'development' && body.amount) {
+    if (!IS_PRODUCTION && body.amount) {
       const annualProduct = ANNUAL_PRODUCTS[body.productId];
       if (annualProduct) {
         const credits = await activateAnnualSubscription(user.id, {

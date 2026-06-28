@@ -49,7 +49,7 @@ DATABASE_URL=postgres://user:password@host:5432/findit
 JWT_SECRET=生成一个足够长的随机字符串
 AZURE_OPENAI_RESPONSES_URL=https://your-resource.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview
 AZURE_OPENAI_API_KEY=your-key
-AZURE_OPENAI_DEPLOYMENT=gpt-5.5
+AZURE_OPENAI_DEPLOYMENT=gpt-5.4-mini
 AZURE_OPENAI_API_VERSION=2025-04-01-preview
 AZURE_STORAGE_ACCOUNT=your-storage-account
 AZURE_STORAGE_KEY=your-storage-key

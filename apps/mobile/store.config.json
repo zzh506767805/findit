@@ -1,0 +1,89 @@
+{
+  "configVersion": 0,
+  "apple": {
+    "version": "1.0.0",
+    "copyright": "© 2026 Zihao Zhao",
+    "release": {
+      "automaticRelease": false
+    },
+    "info": {
+      "zh-Hans": {
+        "description": "放哪了—AI收纳师是一款面向家庭收纳的记录和查找工具。你可以给房间、柜子、抽屉等位置拍照或录像，App 会帮你识别其中的物品，并将它们整理到对应空间里。之后只要输入“护照放在哪里”“备用电池在哪个抽屉”，就能快速查询记录。\n\n主要功能：\n- 拍照或录像记录物品和位置\n- 按空间、位置浏览家中物品\n- 用文字询问物品所在位置\n- 支持编辑、删除识别结果，保持记录准确\n- Apple 登录和 App 内购买\n- 新用户可获得基础体验次数，会员可获得更多识别额度\n\n适合：\n- 经常忘记物品放在哪里\n- 搬家、整理后需要重新建立位置记录\n- 想给家里的储物柜、抽屉、箱子做轻量索引\n\n说明：AI 识别可能存在误差，建议在保存前检查和修正结果。照片、视频和物品记录会用于提供识别、存储和查询功能。",
+        "keywords": [
+          "收纳",
+          "整理",
+          "找东西",
+          "物品管理",
+          "家居",
+          "储物",
+          "拍照记录",
+          "AI识别",
+          "空间管理",
+          "清单",
+          "家庭"
+        ],
+        "marketingUrl": "https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/support",
+        "promoText": "拍照或录像记录家中物品位置，用 AI 帮你整理空间、查找物品。",
+        "supportUrl": "https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/support",
+        "title": "放哪了—AI收纳师",
+        "subtitle": "拍照记录，随时找到",
+        "privacyPolicyUrl": "https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/privacy",
+        "screenshots": {
+          "APP_IPHONE_65": [
+            "store/apple/screenshot/zh-Hans/APP_IPHONE_65/01-spaces-6.5.png",
+            "store/apple/screenshot/zh-Hans/APP_IPHONE_65/02-assistant-6.5.png",
+            "store/apple/screenshot/zh-Hans/APP_IPHONE_65/03-paywall-6.5.png"
+          ],
+          "APP_IPAD_PRO_3GEN_129": [
+            "store/apple/screenshot/zh-Hans/APP_IPAD_PRO_3GEN_129/02-assistant-ipad-12.9.png",
+            "store/apple/screenshot/zh-Hans/APP_IPAD_PRO_3GEN_129/03-paywall-ipad-12.9.png",
+            "store/apple/screenshot/zh-Hans/APP_IPAD_PRO_3GEN_129/01-spaces-ipad-12.9.png"
+          ]
+        }
+      }
+    },
+    "categories": [
+      "LIFESTYLE",
+      "UTILITIES"
+    ],
+    "advisory": {
+      "ageRatingOverride": "NONE",
+      "alcoholTobaccoOrDrugUseOrReferences": "NONE",
+      "contests": "NONE",
+      "gambling": false,
+      "gamblingSimulated": "NONE",
+      "horrorOrFearThemes": "NONE",
+      "kidsAgeBand": null,
+      "koreaAgeRatingOverride": "NONE",
+      "lootBox": false,
+      "matureOrSuggestiveThemes": "NONE",
+      "medicalOrTreatmentInformation": "NONE",
+      "profanityOrCrudeHumor": "NONE",
+      "sexualContentGraphicAndNudity": "NONE",
+      "sexualContentOrNudity": "NONE",
+      "unrestrictedWebAccess": false,
+      "violenceCartoonOrFantasy": "NONE",
+      "violenceRealistic": "NONE",
+      "violenceRealisticProlongedGraphicOrSadistic": "NONE",
+      "advertising": false,
+      "ageAssurance": false,
+      "ageRatingOverrideV2": "NONE",
+      "developerAgeRatingInfoUrl": null,
+      "gunsOrOtherWeapons": "NONE",
+      "healthOrWellnessTopics": false,
+      "messagingAndChat": false,
+      "parentalControls": false,
+      "userGeneratedContent": false
+    },
+    "review": {
+      "firstName": "Zihao",
+      "lastName": "Zhao",
+      "email": "zzh506767805@gmail.com",
+      "phone": "+86 19271930665",
+      "demoUsername": "使用 Sign in with Apple",
+      "demoPassword": "无需密码",
+      "demoRequired": true,
+      "notes": "本 App 使用 Sign in with Apple 登录，无单独用户名/密码。审核时请使用 Apple 账号登录。\n\n主要测试流程：登录后进入“助手”或“我的家”，可选择/拍摄照片记录物品位置；文字查询不消耗识别次数。新用户有基础体验权益。\n\nApp 内购买商品：fangnale_yearly（标准年卡）和 fangnale_yearly_large（大户型年卡）。如需协助测试，请联系 zzh506767805@gmail.com。"
+    }
+  }
+}

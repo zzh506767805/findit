@@ -13,6 +13,7 @@ const PRODUCTS = [
   { id: 'fangnale_yearly_large', label: '大户型版', price: '¥128/年', credits: 3000, desc: '适合大空间家庭', cta: '开通' }
 ];
 const PRODUCT_IDS = PRODUCTS.map(p => p.id);
+const FINISH_TRANSACTION_TIMEOUT_MS = 4000;
 
 const PRODUCT_LABELS = {
   welcome_trial: '新人会员',
@@ -68,6 +69,14 @@ function isProcessablePurchase(purchase) {
   const purchased = states.PURCHASED ?? 1;
   const restored = states.RESTORED ?? 3;
   return state == null || state === purchased || state === restored;
+}
+
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
 }
 
 export default function PaywallScreen({
@@ -241,6 +250,7 @@ export default function PaywallScreen({
       if (!receiptData) {
         console.warn('[iap] receipt unavailable', purchaseDebugSummary(purchase));
         Alert.alert('缺少购买凭证', 'App Store 没有返回 receipt，请点“恢复购买”重试；如果仍失败，需要安装最新 TestFlight 构建再测。');
+        setLoading(false);
         return;
       }
 
@@ -256,14 +266,25 @@ export default function PaywallScreen({
       });
 
       const purchaseToFinish = purchase?.orderId ? purchase : receiptPurchase;
-      await InAppPurchases.finishTransactionAsync(purchaseToFinish, false);
-      onPurchase?.(result);
+      setLoading(false);
+      await onPurchase?.(result);
       Alert.alert(result.alreadyProcessed ? '购买已恢复' : '开通成功', result.subscription?.expires_at ? `会员有效期至 ${formatDate(result.subscription.expires_at)}` : '一年会员权益已开通');
+      finishTransactionAfterUnlock(purchaseToFinish);
     } catch (err) {
       Alert.alert('验证失败', err.message);
-    } finally {
       setLoading(false);
     }
+  }
+
+  function finishTransactionAfterUnlock(purchase) {
+    if (!purchase || !InAppPurchases) return;
+    withTimeout(
+      InAppPurchases.finishTransactionAsync(purchase, false),
+      FINISH_TRANSACTION_TIMEOUT_MS,
+      'finishTransactionAsync timeout'
+    ).catch((err) => {
+      console.warn('[iap] finish transaction failed:', err.message, purchaseDebugSummary(purchase));
+    });
   }
 
   async function handlePurchase(product) {
@@ -275,9 +296,9 @@ export default function PaywallScreen({
           method: 'POST',
           body: { amount: product.credits, productId: product.id }
         });
-        onPurchase?.(result);
-        Alert.alert('开通成功', result.subscription?.expires_at ? `会员有效期至 ${formatDate(result.subscription.expires_at)}` : '一年会员权益已开通');
         setLoading(false);
+        await onPurchase?.(result);
+        Alert.alert('开通成功', result.subscription?.expires_at ? `会员有效期至 ${formatDate(result.subscription.expires_at)}` : '一年会员权益已开通');
         return;
       }
 
