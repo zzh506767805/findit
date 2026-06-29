@@ -158,6 +158,34 @@ export async function requireUser(userId) {
   throw Object.assign(new Error('User not found'), { status: 401 });
 }
 
+export async function deleteUserAccount(userId) {
+  const client = await pool().connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('UPDATE users SET referred_by_user_id = NULL WHERE referred_by_user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM reward_events WHERE user_id = $1 OR related_user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM iap_transactions WHERE user_id = $1', [userId]).catch(() => {});
+    await client.query(
+      'DELETE FROM messages WHERE user_id = $1 OR conversation_id IN (SELECT id FROM conversations WHERE user_id = $1)',
+      [userId]
+    ).catch(() => {});
+    await client.query('DELETE FROM conversations WHERE user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM item_records WHERE user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM items WHERE user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM media_assets WHERE user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM positions WHERE user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM spaces WHERE user_id = $1', [userId]).catch(() => {});
+    const result = await client.query('DELETE FROM users WHERE id = $1', [userId]);
+    await client.query('COMMIT');
+    return { success: result.rowCount > 0 };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function getUserBenefits(userId) {
   const inviteCode = await ensureInviteCode(userId);
   const rows = await query(

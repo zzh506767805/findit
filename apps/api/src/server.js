@@ -17,7 +17,7 @@ import {
   createMediaAsset,
   getUserCredits, consumeCredit, refundCredit, addCredits,
   activateAnnualSubscription, recordIapAnnualPurchase,
-  getUserBenefits, claimWelcomeBenefit, redeemInviteCode,
+  getUserBenefits, claimWelcomeBenefit, redeemInviteCode, deleteUserAccount,
   confirmAndSave,
   initConversationTables, getOrCreateConversation, createConversation,
   getConversationMessages, createMessage, updateMessageConfirmed,
@@ -265,7 +265,7 @@ function sendHtml(res, title, body) {
 function sendSupportPage(res) {
   sendHtml(res, '放哪了—AI收纳师｜支持', `
     <h1>放哪了—AI收纳师支持</h1>
-    <p class="muted">更新日期：2026年5月17日</p>
+    <p class="muted">更新日期：2026年6月29日</p>
     <p>放哪了—AI收纳师用于通过拍照或录像记录家中物品位置，并在需要时帮助查询物品所在位置。</p>
     <h2>常见问题</h2>
     <ul>
@@ -303,7 +303,7 @@ function sendPrivacyPage(res) {
     <h2>数据共享</h2>
     <p>我们不会出售你的个人信息。除提供服务、遵守法律要求、处理安全风险或经你同意外，我们不会向无关第三方披露你的个人信息。</p>
     <h2>数据保存与删除</h2>
-    <p>我们会在提供服务所需期间保存账号、照片/视频、物品记录和购买记录。你可以在 App 内或通过支持邮箱请求删除账号和相关个人数据；依法需要保留的交易或安全记录可能会按法律要求保存。</p>
+    <p>我们会在提供服务所需期间保存账号、照片/视频、物品记录和购买记录。你可以在 App 内“我的”页面发起删除账号和相关个人数据；依法需要保留的交易或安全记录可能会按法律要求保存。</p>
     <h2>权限说明</h2>
     <p>相机和照片权限仅用于拍摄、选择和上传你要记录的照片或视频。你可以在系统设置中关闭相关权限，但部分功能将无法使用。</p>
     <h2>联系我们</h2>
@@ -314,14 +314,14 @@ function sendPrivacyPage(res) {
 function sendTermsPage(res) {
   sendHtml(res, '放哪了—AI收纳师｜用户协议', `
     <h1>用户协议</h1>
-    <p class="muted">更新日期：2026年5月17日</p>
+    <p class="muted">更新日期：2026年6月29日</p>
     <p>使用放哪了—AI收纳师即表示你同意本协议。</p>
     <h2>服务说明</h2>
     <p>本 App 提供家庭物品拍照/录像记录、AI 识别、空间位置管理和物品查询功能。AI 结果可能存在错误，请以实际情况为准。</p>
     <h2>账号与内容</h2>
     <p>你应确保上传内容合法并拥有必要权利。请勿上传违法、侵权、敏感或与家庭收纳无关的内容。</p>
     <h2>会员与购买</h2>
-    <p>App 内展示的会员或购买项目以 App Store 结算页为准。购买完成后，系统会根据购买项目发放对应会员权益。如遇购买异常，可在 App 内恢复购买或联系支持。</p>
+    <p>App 内展示的会员或购买项目以 App Store 结算页为准。标准年卡和大户型年卡均为一年自动续订会员。购买完成后，系统会根据购买项目发放对应会员权益；标准版适合多数家庭，大户型版适合多房间或物品更多的家庭。如遇购买异常，可在 App 内恢复购买或联系支持。</p>
     <h2>限制与免责声明</h2>
     <p>本 App 不提供医疗、法律、金融或安全应急建议。由于网络、设备、第三方服务或 AI 判断限制，服务可能出现延迟、中断或识别错误。</p>
     <h2>联系我们</h2>
@@ -729,6 +729,11 @@ async function route(req, res) {
     const body = await readJson(req);
     const result = await redeemInviteCode(user.id, body.invite_code || body.inviteCode);
     return sendJson(res, 200, result);
+  }
+
+  if (method === 'DELETE' && url.pathname === '/user/account') {
+    await deleteUserAccount(user.id);
+    return sendJson(res, 200, { success: true });
   }
 
   if (method === 'POST' && url.pathname === '/user/add-credits') {

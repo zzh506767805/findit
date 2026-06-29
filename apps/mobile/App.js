@@ -44,6 +44,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import PaywallScreen from './src/screens/PaywallScreen';
 import WelcomeBenefitScreen from './src/screens/WelcomeBenefitScreen';
 
+const APP_NAME = '放哪了';
 
 const tabs = [
   { id: 'spaces', label: '我的家', icon: 'home', width: 82 },
@@ -235,6 +236,23 @@ export default function App() {
     refreshCredits();
   }
 
+  async function handleDeleteAccount() {
+    await requestJson('/user/account', {
+      apiUrl,
+      token,
+      method: 'DELETE'
+    });
+    await clearSession();
+    setToken(null);
+    setUser(null);
+    setCredits(null);
+    setBenefits(null);
+    setShowPaywall(false);
+    setShowBenefits(false);
+    setPendingMedia(null);
+    setDataVersion((v) => v + 1);
+  }
+
   function switchTab(next) {
     if (next === tab) return;
     const idx = tabs.findIndex((t) => t.id === next);
@@ -252,7 +270,7 @@ export default function App() {
     return (
       <AppSafeArea style={[s.safe, { alignItems: 'center', justifyContent: 'center' }]}>
         <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
-        <Text style={s.logo}>FindIt</Text>
+        <Text style={s.logo}>{APP_NAME}</Text>
       </AppSafeArea>
     );
   }
@@ -284,7 +302,7 @@ export default function App() {
     <AppSafeArea>
       <StatusBar barStyle="dark-content" backgroundColor={colors.bg} />
       <View style={s.topBar}>
-        <Text style={s.logo}>FindIt</Text>
+        <Text style={s.logo}>{APP_NAME}</Text>
         <View style={s.topActions}>
           <View style={s.tabRow}>
             <Animated.View style={[s.slider, { transform: [{ translateX: sliderX }], width: sliderW }]} />
@@ -374,6 +392,7 @@ export default function App() {
             onPurchase={handlePaywallPurchase}
             onClaim={handleClaimWelcome}
             onRedeem={handleRedeemInvite}
+            onDeleteAccount={handleDeleteAccount}
             onClose={() => setShowPaywall(false)}
           />
         </View>

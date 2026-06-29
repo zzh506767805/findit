@@ -24,7 +24,7 @@ export function Header({ apiUrl, onApiUrlChange, user, onRefresh, loading }) {
     <View style={s.header}>
       <View style={s.headerTop}>
         <View style={s.brand}>
-          <Text style={s.brandName}>FindIt</Text>
+          <Text style={s.brandName}>放哪了</Text>
           <View style={[s.statusDot, user && s.statusDotOnline]} />
         </View>
         <View style={s.headerActions}>

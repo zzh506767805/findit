@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { initialWindowMetrics, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,12 +9,28 @@ import { requestJson } from '../api';
 import { colors, radius } from '../theme';
 
 const PRODUCTS = [
-  { id: 'fangnale_yearly', label: '标准版', price: '¥68/年', credits: 1000, desc: '适合多数家庭', cta: '开通', primary: true },
-  { id: 'fangnale_yearly_large', label: '大户型版', price: '¥128/年', credits: 3000, desc: '适合大空间家庭', cta: '开通' }
+  {
+    id: 'fangnale_yearly',
+    label: '标准版',
+    price: '¥68/年',
+    credits: 1000,
+    desc: '一年会员，适合多数家庭；可持续拍照或录像识别、保存物品位置，并用文字查找。',
+    cta: '开通',
+    primary: true
+  },
+  {
+    id: 'fangnale_yearly_large',
+    label: '大户型版',
+    price: '¥128/年',
+    credits: 3000,
+    desc: '一年会员，适合多房间或物品更多的家庭；包含更多媒体识别额度和完整查找功能。',
+    cta: '开通'
+  }
 ];
 const PRODUCT_IDS = PRODUCTS.map(p => p.id);
 const FINISH_TRANSACTION_TIMEOUT_MS = 4000;
 const PURCHASE_HISTORY_FALLBACK_DELAYS_MS = [700, 1600, 3200];
+const STORE_TIMEOUT_MS = 10000;
 
 const PRODUCT_LABELS = {
   welcome_trial: '新人会员',
@@ -101,6 +117,7 @@ export default function PaywallScreen({
   onPurchase,
   onClaim,
   onRedeem,
+  onDeleteAccount,
   onClose
 }) {
   const [loading, setLoading] = useState(false);
@@ -197,7 +214,7 @@ export default function PaywallScreen({
   async function connectToStore() {
     if (connectedRef.current) return;
     try {
-      await InAppPurchases.connectAsync();
+      await withTimeout(InAppPurchases.connectAsync(), STORE_TIMEOUT_MS, '连接 App Store 超时');
     } catch (err) {
       if (!String(err?.message || '').includes('Already connected')) throw err;
     }
@@ -212,7 +229,11 @@ export default function PaywallScreen({
     setStoreError('');
     try {
       await connectToStore();
-      const { responseCode, results } = await InAppPurchases.getProductsAsync(PRODUCT_IDS);
+      const { responseCode, results } = await withTimeout(
+        InAppPurchases.getProductsAsync(PRODUCT_IDS),
+        STORE_TIMEOUT_MS,
+        '读取 App Store 商品超时'
+      );
       const products = Array.isArray(results) ? results : [];
       if (responseCode !== InAppPurchases.IAPResponseCode.OK) {
         throw new Error('商店商品查询失败');
@@ -458,10 +479,50 @@ export default function PaywallScreen({
   function getActionText(product) {
     if (loading) return '处理中';
     if (Platform.OS !== 'web' && !__DEV__) {
-      if (storeLoading || !storeReady) return '加载中';
-      if (!isStoreProductAvailable(product)) return '未就绪';
+      if (storeLoading || !storeReady) return '请稍候';
+      if (!isStoreProductAvailable(product)) return '稍后重试';
     }
     return product.cta;
+  }
+
+  function legalUrl(path) {
+    return `${String(apiUrl || '').replace(/\/$/, '')}${path}`;
+  }
+
+  async function openLegal(path) {
+    const url = legalUrl(path);
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('无法打开链接', url);
+    }
+  }
+
+  function confirmDeleteAccount() {
+    const run = async () => {
+      setLoading(true);
+      try {
+        await onDeleteAccount?.();
+      } catch (err) {
+        Alert.alert('删除失败', err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm('确定删除账号和已保存的数据吗？此操作无法撤销。')) run();
+      return;
+    }
+
+    Alert.alert(
+      '删除账号和数据',
+      '删除后，你的账号、照片/视频记录、空间、位置、物品和对话内容将从服务中移除。此操作无法撤销。',
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '确认删除', style: 'destructive', onPress: run }
+      ]
+    );
   }
 
   function renderPlanOptions() {
@@ -483,16 +544,28 @@ export default function PaywallScreen({
                 {p.primary ? <Text style={s.planBadge}>推荐</Text> : null}
               </View>
               <Text style={s.planOptionDesc}>{p.desc}</Text>
+              <Text style={s.planOptionRenew}>自动续订，可在 Apple ID 订阅管理中取消。</Text>
             </View>
             <View style={s.planOptionSide}>
               <Text style={s.planOptionPrice}>{getDisplayPrice(p)}</Text>
               <View style={s.planOptionAction}>
                 <Text style={s.planOptionActionText}>{getActionText(p)}</Text>
-                <Feather name="chevron-right" size={15} color="#2F7D5B" />
+                {storeLoading || !isStoreProductAvailable(p) ? null : (
+                  <Feather name="chevron-right" size={15} color="#2F7D5B" />
+                )}
               </View>
             </View>
           </Pressable>
         ))}
+        <View style={s.legalLinks}>
+          <Pressable onPress={() => openLegal('/privacy')} hitSlop={8}>
+            <Text style={s.legalLinkText}>隐私政策</Text>
+          </Pressable>
+          <Text style={s.legalDot}>·</Text>
+          <Pressable onPress={() => openLegal('/terms')} hitSlop={8}>
+            <Text style={s.legalLinkText}>用户协议</Text>
+          </Pressable>
+        </View>
         {storeError ? <Text style={s.storeNotice}>{storeError}</Text> : null}
       </View>
     );
@@ -633,6 +706,19 @@ export default function PaywallScreen({
           {notice ? <Text style={s.notice}>{notice}</Text> : null}
         </View>
 
+        <View style={s.accountSection}>
+          <Text style={s.sectionTitle}>账号与数据</Text>
+          <Text style={s.sectionMeta}>可以删除账号和已保存的个人数据。</Text>
+          <Pressable
+            style={({ pressed }) => [s.deleteAccountBtn, pressed && s.pressed]}
+            onPress={confirmDeleteAccount}
+            disabled={loading}
+          >
+            <Feather name="trash-2" size={16} color="#B13A2F" />
+            <Text style={s.deleteAccountText}>删除账号</Text>
+          </Pressable>
+        </View>
+
       </ScrollView>
     </View>
   );
@@ -722,11 +808,20 @@ const s = StyleSheet.create({
   planOptionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   planOptionLabel: { color: colors.text, fontSize: 16, fontWeight: '800' },
   planBadge: { color: '#2F7D5B', fontSize: 12, fontWeight: '800' },
-  planOptionDesc: { color: colors.textTertiary, fontSize: 12, fontWeight: '600', marginTop: 5 },
-  planOptionSide: { alignItems: 'flex-end', gap: 5 },
+  planOptionDesc: { color: colors.textTertiary, fontSize: 12, fontWeight: '600', marginTop: 5, lineHeight: 17 },
+  planOptionRenew: { color: colors.textDim, fontSize: 11, fontWeight: '600', marginTop: 4, lineHeight: 15 },
+  planOptionSide: { alignItems: 'flex-end', gap: 5, maxWidth: 96 },
   planOptionPrice: { color: colors.text, fontSize: 18, fontWeight: '800' },
   planOptionAction: { flexDirection: 'row', alignItems: 'center', gap: 2 },
   planOptionActionText: { color: '#2F7D5B', fontSize: 13, fontWeight: '800' },
+  legalLinks: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12
+  },
+  legalLinkText: { color: '#2F7D5B', fontSize: 12, fontWeight: '800' },
+  legalDot: { color: colors.textDim, fontSize: 12, fontWeight: '800' },
   storeNotice: { color: colors.textTertiary, fontSize: 12, fontWeight: '600', marginTop: 8, lineHeight: 17 },
   benefitSection: {
     paddingBottom: 2
@@ -818,5 +913,26 @@ const s = StyleSheet.create({
   redeemText: { color: colors.white, fontSize: 14, fontWeight: '800' },
   redeemTextDisabled: { color: colors.textTertiary },
   notice: { color: '#2F7D5B', fontSize: 13, fontWeight: '700', marginTop: 12 },
+  accountSection: {
+    paddingTop: 4,
+    paddingBottom: 6
+  },
+  deleteAccountBtn: {
+    minHeight: 44,
+    marginTop: 12,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#E7B5AD',
+    backgroundColor: '#FFF7F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8
+  },
+  deleteAccountText: {
+    color: '#B13A2F',
+    fontSize: 14,
+    fontWeight: '800'
+  },
   pressed: { opacity: 0.7 }
 });
