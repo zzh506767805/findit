@@ -118,6 +118,7 @@ export default function PaywallScreen({
   onClaim,
   onRedeem,
   onDeleteAccount,
+  onLogout,
   onClose
 }) {
   const [loading, setLoading] = useState(false);
@@ -498,6 +499,33 @@ export default function PaywallScreen({
     }
   }
 
+  function confirmLogout() {
+    const run = async () => {
+      setLoading(true);
+      try {
+        await onLogout?.();
+      } catch (err) {
+        Alert.alert('退出失败', err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm('确定退出登录吗？数据仍会保留在你的账号中。')) run();
+      return;
+    }
+
+    Alert.alert(
+      '退出登录',
+      '退出后需要重新登录才能查看你的记录，数据不会被删除。',
+      [
+        { text: '取消', style: 'cancel' },
+        { text: '退出登录', onPress: run }
+      ]
+    );
+  }
+
   function confirmDeleteAccount() {
     const run = async () => {
       setLoading(true);
@@ -708,7 +736,15 @@ export default function PaywallScreen({
 
         <View style={s.accountSection}>
           <Text style={s.sectionTitle}>账号与数据</Text>
-          <Text style={s.sectionMeta}>可以删除账号和已保存的个人数据。</Text>
+          <Text style={s.sectionMeta}>可以退出登录，或删除账号和已保存的个人数据。</Text>
+          <Pressable
+            style={({ pressed }) => [s.logoutBtn, pressed && s.pressed]}
+            onPress={confirmLogout}
+            disabled={loading}
+          >
+            <Feather name="log-out" size={16} color={colors.textSecondary} />
+            <Text style={s.logoutText}>退出登录</Text>
+          </Pressable>
           <Pressable
             style={({ pressed }) => [s.deleteAccountBtn, pressed && s.pressed]}
             onPress={confirmDeleteAccount}
@@ -916,6 +952,23 @@ const s = StyleSheet.create({
   accountSection: {
     paddingTop: 4,
     paddingBottom: 6
+  },
+  logoutBtn: {
+    minHeight: 44,
+    marginTop: 12,
+    borderRadius: radius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    backgroundColor: colors.bgInput,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 8
+  },
+  logoutText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '800'
   },
   deleteAccountBtn: {
     minHeight: 44,

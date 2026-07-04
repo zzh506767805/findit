@@ -236,12 +236,7 @@ export default function App() {
     refreshCredits();
   }
 
-  async function handleDeleteAccount() {
-    await requestJson('/user/account', {
-      apiUrl,
-      token,
-      method: 'DELETE'
-    });
+  async function resetToLogin() {
     await clearSession();
     setToken(null);
     setUser(null);
@@ -251,6 +246,19 @@ export default function App() {
     setShowBenefits(false);
     setPendingMedia(null);
     setDataVersion((v) => v + 1);
+  }
+
+  async function handleLogout() {
+    await resetToLogin();
+  }
+
+  async function handleDeleteAccount() {
+    await requestJson('/user/account', {
+      apiUrl,
+      token,
+      method: 'DELETE'
+    });
+    await resetToLogin();
   }
 
   function switchTab(next) {
@@ -393,6 +401,7 @@ export default function App() {
             onClaim={handleClaimWelcome}
             onRedeem={handleRedeemInvite}
             onDeleteAccount={handleDeleteAccount}
+            onLogout={handleLogout}
             onClose={() => setShowPaywall(false)}
           />
         </View>

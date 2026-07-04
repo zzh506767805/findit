@@ -165,6 +165,7 @@ export async function deleteUserAccount(userId) {
     await client.query('UPDATE users SET referred_by_user_id = NULL WHERE referred_by_user_id = $1', [userId]).catch(() => {});
     await client.query('DELETE FROM reward_events WHERE user_id = $1 OR related_user_id = $1', [userId]).catch(() => {});
     await client.query('DELETE FROM iap_transactions WHERE user_id = $1', [userId]).catch(() => {});
+    await client.query('DELETE FROM usage_daily WHERE user_id = $1', [userId]).catch(() => {});
     await client.query(
       'DELETE FROM messages WHERE user_id = $1 OR conversation_id IN (SELECT id FROM conversations WHERE user_id = $1)',
       [userId]
@@ -381,6 +382,48 @@ export async function refundCredit(userId, type) {
 
 export async function addCredits(userId, amount) {
   await query('UPDATE users SET paid_credits = paid_credits + $1 WHERE id = $2', [amount, userId]);
+}
+
+// ─── Daily AI Quota (abuse guard, applies to query + analyze) ───
+
+const DAILY_AI_LIMITS = {
+  query: { free: 1, member: 50 },
+  analyze: { free: 1, member: 50 }
+};
+
+// 业务时区固定为北京时间：线上 DB 是 UTC，直接用 CURRENT_DATE 会导致“今日”早上 8 点才重置
+const QUOTA_DAY_SQL = `(now() AT TIME ZONE 'Asia/Shanghai')::date`;
+
+export async function consumeDailyAiQuota(userId, kind) {
+  const column = kind === 'analyze' ? 'analyze_count' : 'query_count';
+  const rows = await query(
+    `INSERT INTO usage_daily (user_id, day, ${column}) VALUES ($1, ${QUOTA_DAY_SQL}, 1)
+     ON CONFLICT (user_id, day) DO UPDATE SET ${column} = usage_daily.${column} + 1
+     RETURNING ${column} AS count`,
+    [userId]
+  );
+  const count = Number(rows[0]?.count || 0);
+
+  const credits = await getUserCredits(userId);
+  const isMember = credits.subscription.active;
+  const limits = DAILY_AI_LIMITS[kind] || DAILY_AI_LIMITS.query;
+  const limit = isMember ? limits.member : limits.free;
+
+  if (count > limit) {
+    const label = kind === 'analyze' ? '识别' : '对话';
+    const hint = isMember ? '请明天再试' : '请明天再试，开通会员可提高上限';
+    throw Object.assign(new Error(`今日${label}次数已达上限（${limit} 次/天），${hint}`), { status: 429 });
+  }
+  return { count, limit };
+}
+
+export async function refundDailyAiQuota(userId, kind) {
+  const column = kind === 'analyze' ? 'analyze_count' : 'query_count';
+  await query(
+    `UPDATE usage_daily SET ${column} = GREATEST(${column} - 1, 0)
+     WHERE user_id = $1 AND day = ${QUOTA_DAY_SQL}`,
+    [userId]
+  );
 }
 
 async function applyAnnualSubscription(client, userId, { credits, productId, expiresAt }) {
@@ -665,39 +708,6 @@ export async function createMediaAsset(id, userId, blobUrl, contentType, thumbna
   return rows[0];
 }
 
-export async function updateMediaAssetPosition(mediaId, positionId) {
-  await query('UPDATE media_assets SET position_id = $1 WHERE id = $2', [positionId, mediaId]);
-}
-
-// ─── Items ───
-
-export async function findOrCreateItem(userId, name, description) {
-  const existing = await query('SELECT * FROM items WHERE user_id = $1 AND name = $2', [userId, name]);
-  if (existing.length) {
-    if (description && !existing[0].description) {
-      await query('UPDATE items SET description = $1 WHERE id = $2', [description, existing[0].id]);
-    }
-    return existing[0];
-  }
-  const id = newId();
-  const rows = await query(
-    'INSERT INTO items (id, user_id, name, description) VALUES ($1, $2, $3, $4) RETURNING *',
-    [id, userId, name, description || '']
-  );
-  return rows[0];
-}
-
-// ─── Item Records ───
-
-export async function createItemRecord(userId, itemId, positionId, mediaAssetId, note) {
-  const id = newId();
-  const rows = await query(
-    'INSERT INTO item_records (id, user_id, item_id, position_id, media_asset_id, note) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-    [id, userId, itemId, positionId, mediaAssetId || null, note || '']
-  );
-  return rows[0];
-}
-
 // ─── Search (for agent tools) ───
 
 export async function searchItems(userId, queryText) {
@@ -790,10 +800,6 @@ export async function getMediaAssetById(mediaAssetId) {
   return rows[0] || null;
 }
 
-export function formatLocationPath(spaceName, positionName) {
-  return [spaceName, positionName].filter(Boolean).join(' / ');
-}
-
 // ─── Conversations & Messages ───
 
 export async function initConversationTables() {
@@ -834,6 +840,13 @@ export async function initConversationTables() {
   )`).catch(() => {});
   await query(`CREATE INDEX IF NOT EXISTS iap_transactions_user_created_idx
     ON iap_transactions (user_id, created_at DESC)`).catch(() => {});
+  await query(`CREATE TABLE IF NOT EXISTS usage_daily (
+    user_id UUID NOT NULL REFERENCES users(id),
+    day DATE NOT NULL,
+    query_count INTEGER NOT NULL DEFAULT 0,
+    analyze_count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+  )`).catch((err) => console.warn('usage_daily init:', err.message));
   await query(`CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY, user_id UUID NOT NULL REFERENCES users(id),
     last_response_id TEXT, client_day TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -940,10 +953,6 @@ export async function createMessage(conversationId, userId, { role, type, conten
 
 export async function updateMessageConfirmed(messageId, userId) {
   await query('UPDATE messages SET confirmed = true WHERE id = $1 AND user_id = $2', [messageId, userId]);
-}
-
-export async function updateMessageSuggestion(messageId, suggestion) {
-  await query('UPDATE messages SET suggestion = $1 WHERE id = $2', [JSON.stringify(suggestion), messageId]);
 }
 
 export async function updateConversationResponseId(conversationId, responseId) {

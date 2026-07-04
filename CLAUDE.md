@@ -34,7 +34,7 @@ GitHub: https://github.com/zzh506767805/findit
 - 数据库名：findit
 - 用户：finditadmin
 - 核心表：users, spaces, positions, media_assets, items, item_records, conversations, messages, reward_events, iap_transactions
-- users 额外字段：apple_user_id, free_credits(默认10), paid_credits, subscription_expires_at, subscription_product_id
+- users 额外字段：apple_user_id, free_credits(默认3), paid_credits, subscription_expires_at, subscription_product_id, invite_code, welcome_claimed_at, invite_redeemed_at, referred_by_user_id
 - messages 额外字段：source（'assistant' 或 'spaces'，标记消息来源页面）
 - 防火墙：allow-dev 开放所有IP（开发阶段），allow-azure 开放 Azure 内部
 
@@ -66,7 +66,8 @@ Find/
 │   │       │   └── SuggestionCard.js  # 识别结果确认/编辑卡片
 │   │       └── screens/
 │   │           ├── LoginScreen.js       # Apple Sign In + 开发模式 demo 登录
-│   │           ├── PaywallScreen.js     # 付费墙（标准年卡 + 大户型年卡）
+│   │           ├── PaywallScreen.js     # 付费墙（双年卡 IAP + 新人礼包/邀请码 + 退出登录/删除账号）
+│   │           ├── WelcomeBenefitScreen.js # 新人会员领取 + 邀请码兑换
 │   │           ├── AssistantScreen.js   # 助手页（对话，支持拍照/录像/文字）
 │   │           ├── SpacesScreen.js      # 我的家（空间列表 + 识别面板）
 │   │           └── SpaceDetailScreen.js # 空间详情（多图横滑 + 物品列表）
@@ -78,6 +79,7 @@ Find/
 │           ├── store.js          # PostgreSQL 数据访问 + 用量计费 + 对话管理
 │           ├── agent.js          # Responses API + 工具调用循环 + 图片压缩
 │           ├── blob.js           # Azure Blob Storage 上传 + SAS URL 生成
+│           ├── locationRules.js  # 房间/家具名称规则（space vs position 判定）
 │           └── tools.js          # Agent 工具定义和执行
 ```
 
@@ -144,10 +146,16 @@ Expo App → API (Container Apps) → PostgreSQL
 
 ### 用量计费
 
-- 免费：10 次识别（注册时赠送）
+- 免费：3 次识别（注册时赠送，DEFAULT_FREE_CREDITS=3）
+- 新人礼包：领取后获得 15 天会员 + 30 次额度（welcome_trial，计入 paid_credits）
+- 邀请码：兑换后双方各得 15 次免费额度（free_credits）
 - 标准年卡：¥68/年，适合 100m² 以内户型，内部额度 1000 次/年
 - 大户型年卡：¥128/年，适合 300m² 以下户型，内部额度 3000 次/年
-- 查询不限次，只有识别（拍照/录像）扣次数
+- 查询不扣额度，只有识别（拍照/录像）扣次数
+- 每日上限（usage_daily 表，query/analyze 分开计数）：免费用户对话和识别各 1 次/天；会员各 50 次/天，超限返回 429。注意：领了新人礼包的用户 15 天内算会员
+- 每日上限按北京时间重置（Asia/Shanghai）；计"尝试次数"，AI 调用失败会回滚当次配额（连同识别额度一起退）
+- /agent/analyze 在解析文件前先预检余额（403）和每日配额（429），consumeCredit 原子扣减仍在上传成功后
+- /agent/query 校验：空内容 400，超 500 字 400
 - 年卡购买后写入 subscription_expires_at；付费额度只在有效期内可用，过期后 total 只计算免费额度
 - iap_transactions 按 transaction_id 去重，恢复购买不会重复加额度
 - 后端 /agent/analyze 接口调用前 consumeCredit，余额不足返回 403
@@ -244,7 +252,7 @@ npx eas-cli build --profile preview --platform ios
 - 一个 Agent 两种模式（识别/查找），不拆多 Agent
 - 配色用米白浅色方案（theme.js 统一管理），照片是唯一色彩
 - 登录方案：强制 Apple Sign In（上架要求）
-- 付费方案：标准年卡 ¥68（100m² 以内，内部 1000 次/年）+ 大户型年卡 ¥128（300m² 以下，内部 3000 次/年），免费 10 次
+- 付费方案：标准年卡 ¥68（100m² 以内，内部 1000 次/年）+ 大户型年卡 ¥128（300m² 以下，内部 3000 次/年），免费 3 次 + 新人礼包 15 天/30 次 + 邀请码双方各 15 次
 - 查询不计次，只有识别扣次数（AI 调用成本控制）
 - 日本区部署（Container Apps + PostgreSQL），阿里云做备案落地
 - 图片用 FormData multipart 上传到 Blob Storage，不用 base64

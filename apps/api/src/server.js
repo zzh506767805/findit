@@ -16,12 +16,13 @@ import {
   getPositionDetail,
   createMediaAsset,
   getUserCredits, consumeCredit, refundCredit, addCredits,
+  consumeDailyAiQuota, refundDailyAiQuota,
   activateAnnualSubscription, recordIapAnnualPurchase,
   getUserBenefits, claimWelcomeBenefit, redeemInviteCode, deleteUserAccount,
   confirmAndSave,
   initConversationTables, getOrCreateConversation, createConversation,
   getConversationMessages, createMessage, updateMessageConfirmed,
-  updateMessageSuggestion, updateConversationResponseId,
+  updateConversationResponseId,
   updateItem, deleteItem, getMediaAssetById
 } from './store.js';
 
@@ -903,6 +904,12 @@ async function route(req, res) {
   // ─── Agent (SSE) ───
 
   if (method === 'POST' && url.pathname === '/agent/analyze') {
+    // 在解析/上传文件之前先做额度检查：余额（只读预检，正式扣减仍在上传成功后）和每日配额，
+    // 避免超限用户白白消耗上传和存储成本
+    const preCredits = await getUserCredits(user.id);
+    if (preCredits.total <= 0) return sendJson(res, 403, { error: '免费体验已用完，请开通会员继续使用' });
+    await consumeDailyAiQuota(user.id, 'analyze');
+
     const ct = req.headers['content-type'] || '';
     let imageBase64, mimeType, videoFrames, saved;
     let queryText = '';
@@ -1055,6 +1062,7 @@ async function route(req, res) {
     } catch (err) {
       log(`AI agent failed: ${err.stack || err.message || err}`);
       await refundCredit(user.id, creditType).catch(() => {});
+      await refundDailyAiQuota(user.id, 'analyze').catch(() => {});
       sendSse(res, 'error', { error: err.message || 'Agent failed' });
       res.end();
       return;
@@ -1066,7 +1074,10 @@ async function route(req, res) {
 
   if (method === 'POST' && url.pathname === '/agent/query') {
     const body = await readJson(req);
-    const queryText = String(body.query || '');
+    const queryText = String(body.query || '').trim();
+    if (!queryText) return sendJson(res, 400, { error: '请输入内容' });
+    if (queryText.length > 500) return sendJson(res, 400, { error: '内容太长了，请精简到 500 字以内' });
+    await consumeDailyAiQuota(user.id, 'query');
     const clientDay = clientDayFromRequest(url, body);
 
     const conv = await getOrCreateConversation(user.id, { clientDay });
@@ -1083,27 +1094,34 @@ async function route(req, res) {
     let agentSuggestion = null;
     const agentSteps = [];
 
-    const result = await runAgent({
-      mode: 'query',
-      query: queryText,
-      userId: user.id,
-      uploadDir: UPLOAD_DIR,
-      previousResponseId: conv.last_response_id,
-      onEvent: (event) => {
-        sendSse(res, event.type, event);
-        if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
-        if (event.type === 'answer_delta') agentAnswer = event.text || agentAnswer;
-        if (event.type === 'answer') agentAnswer = event.text || '';
-        if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
-      }
-    });
+    try {
+      const result = await runAgent({
+        mode: 'query',
+        query: queryText,
+        userId: user.id,
+        uploadDir: UPLOAD_DIR,
+        previousResponseId: conv.last_response_id,
+        onEvent: (event) => {
+          sendSse(res, event.type, event);
+          if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
+          if (event.type === 'answer_delta') agentAnswer = event.text || agentAnswer;
+          if (event.type === 'answer') agentAnswer = event.text || '';
+          if (event.type === 'done' && event.suggestion) agentSuggestion = event.suggestion;
+        }
+      });
 
-    const agentMsg = await createMessage(conv.id, user.id, {
-      role: 'agent', type: 'answer', content: agentAnswer,
-      suggestion: agentSuggestion, steps: agentSteps
-    });
-    if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
-    sendSse(res, 'message_saved', { message_id: agentMsg.id });
+      const agentMsg = await createMessage(conv.id, user.id, {
+        role: 'agent', type: 'answer', content: agentAnswer,
+        suggestion: agentSuggestion, steps: agentSteps
+      });
+      if (result.responseId) await updateConversationResponseId(conv.id, result.responseId);
+      sendSse(res, 'message_saved', { message_id: agentMsg.id });
+    } catch (err) {
+      await refundDailyAiQuota(user.id, 'query').catch(() => {});
+      sendSse(res, 'error', { error: err.message || 'Agent failed' });
+      res.end();
+      return;
+    }
 
     res.end();
     return;
