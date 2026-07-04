@@ -1,61 +1,71 @@
 const coverSets = {
   living: [
     require('../assets/space-covers/living_1.jpg'),
-    require('../assets/space-covers/living_2.jpg')
+    require('../assets/space-covers/living_2.jpg'),
+    require('../assets/space-covers/living_3.jpg'),
+    require('../assets/space-covers/living_4.jpg')
   ],
   bedroom: [
     require('../assets/space-covers/bedroom_1.jpg'),
-    require('../assets/space-covers/bedroom_2.jpg')
+    require('../assets/space-covers/bedroom_2.jpg'),
+    require('../assets/space-covers/bedroom_3.jpg'),
+    require('../assets/space-covers/bedroom_4.jpg')
   ],
   kitchen: [
     require('../assets/space-covers/kitchen_1.jpg'),
-    require('../assets/space-covers/kitchen_2.jpg')
+    require('../assets/space-covers/kitchen_2.jpg'),
+    require('../assets/space-covers/kitchen_3.jpg'),
+    require('../assets/space-covers/kitchen_4.jpg')
   ],
   entry: [
     require('../assets/space-covers/entry_1.jpg'),
-    require('../assets/space-covers/entry_2.jpg')
+    require('../assets/space-covers/entry_2.jpg'),
+    require('../assets/space-covers/entry_3.jpg'),
+    require('../assets/space-covers/entry_4.jpg')
   ],
   hallway: [
     require('../assets/space-covers/hallway_1.jpg'),
-    require('../assets/space-covers/hallway_2.jpg')
+    require('../assets/space-covers/hallway_2.jpg'),
+    require('../assets/space-covers/hallway_3.jpg'),
+    require('../assets/space-covers/hallway_4.jpg')
   ],
   bathroom: [
     require('../assets/space-covers/bathroom_1.jpg'),
-    require('../assets/space-covers/bathroom_2.jpg')
+    require('../assets/space-covers/bathroom_2.jpg'),
+    require('../assets/space-covers/bathroom_3.jpg'),
+    require('../assets/space-covers/bathroom_4.jpg')
   ],
   study: [
     require('../assets/space-covers/study_1.jpg'),
-    require('../assets/space-covers/study_2.jpg')
+    require('../assets/space-covers/study_2.jpg'),
+    require('../assets/space-covers/study_3.jpg'),
+    require('../assets/space-covers/study_4.jpg')
   ],
   balcony: [
     require('../assets/space-covers/balcony_1.jpg'),
-    require('../assets/space-covers/balcony_2.jpg')
+    require('../assets/space-covers/balcony_2.jpg'),
+    require('../assets/space-covers/balcony_3.jpg'),
+    require('../assets/space-covers/balcony_4.jpg')
   ],
   storage: [
     require('../assets/space-covers/storage_1.jpg'),
-    require('../assets/space-covers/storage_2.jpg')
-  ],
-  default: [
-    require('../assets/space-covers/living_1.jpg'),
-    require('../assets/space-covers/living_2.jpg'),
-    require('../assets/space-covers/bedroom_1.jpg'),
-    require('../assets/space-covers/bedroom_2.jpg'),
-    require('../assets/space-covers/kitchen_1.jpg'),
-    require('../assets/space-covers/kitchen_2.jpg'),
-    require('../assets/space-covers/entry_1.jpg'),
-    require('../assets/space-covers/entry_2.jpg'),
-    require('../assets/space-covers/hallway_1.jpg'),
-    require('../assets/space-covers/hallway_2.jpg'),
-    require('../assets/space-covers/bathroom_1.jpg'),
-    require('../assets/space-covers/bathroom_2.jpg'),
-    require('../assets/space-covers/study_1.jpg'),
-    require('../assets/space-covers/study_2.jpg'),
-    require('../assets/space-covers/balcony_1.jpg'),
-    require('../assets/space-covers/balcony_2.jpg'),
-    require('../assets/space-covers/storage_1.jpg'),
-    require('../assets/space-covers/storage_2.jpg')
+    require('../assets/space-covers/storage_2.jpg'),
+    require('../assets/space-covers/storage_3.jpg'),
+    require('../assets/space-covers/storage_4.jpg')
   ]
 };
+
+coverSets.default = [
+  ...coverSets.living,
+  ...coverSets.bedroom,
+  ...coverSets.kitchen,
+  ...coverSets.entry,
+  ...coverSets.hallway,
+  ...coverSets.bathroom,
+  ...coverSets.study,
+  ...coverSets.balcony,
+  ...coverSets.storage
+];
 
 const coverRules = [
   {
