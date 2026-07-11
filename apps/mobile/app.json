@@ -12,7 +12,7 @@
     "ios": {
       "supportsTablet": false,
       "icon": "./assets/icon.png",
-      "buildNumber": "8",
+      "buildNumber": "9",
       "infoPlist": {
         "CFBundleDisplayName": "放哪了",
         "NSCameraUsageDescription": "用于拍摄你主动记录的收纳照片或视频，例如记录抽屉、柜子或房间里的物品位置。",

@@ -21,6 +21,7 @@ import { requestJson } from '../api';
 import { AppIcon, EmptyState } from '../ui';
 import { colors, radius, shadows } from '../theme';
 import SpaceDetailScreen from './SpaceDetailScreen';
+import OnboardingGuide, { isGuideDone, markGuideDone } from '../components/OnboardingGuide';
 import { getSpaceCoverSource } from '../spaceCovers';
 
 const heroFloorPlanImage = require('../../assets/home-floorplan-wash.jpg');
@@ -51,6 +52,8 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
   const { width: screenW } = useWindowDimensions();
   const slideAnim = useRef(new Animated.Value(0)).current;
   const [showDetail, setShowDetail] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
+  const guideCheckedRef = useRef(false);
 
   function openSpace(space) {
     setSelectedSpace(space);
@@ -89,6 +92,12 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
   const load = useCallback(async () => {
     try { setData(await requestJson('/spaces', session)); } catch {}
   }, [session, dataVersion]);
+
+  useEffect(() => {
+    if (guideCheckedRef.current) return;
+    guideCheckedRef.current = true;
+    isGuideDone().then((done) => { if (!done) setShowGuide(true); });
+  }, []);
 
   useEffect(() => { load(); }, [load]);
 
@@ -318,6 +327,21 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
         <EmptyState title="还没有空间" text="点击上方添加空间，或拍照让 AI 自动识别" icon="home" />
       ) : null}
     </ScrollView>
+    {showGuide ? (
+      <OnboardingGuide
+        onCapture={() => {
+          setShowGuide(false);
+          markGuideDone();
+          // iOS 上 Modal 关闭动画期间弹 Alert 会被吞掉，等一拍再弹
+          if (Platform.OS === 'web') pickAndSend();
+          else setTimeout(() => pickAndSend(), 400);
+        }}
+        onDismiss={() => {
+          setShowGuide(false);
+          markGuideDone();
+        }}
+      />
+    ) : null}
     </View>
   );
 }
