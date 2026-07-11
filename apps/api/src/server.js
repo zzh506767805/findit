@@ -40,9 +40,10 @@ async function loadEnvFile() {
       const index = trimmed.indexOf('=');
       const key = trimmed.slice(0, index).trim();
       const value = trimmed.slice(index + 1).trim();
-      if (!process.env[key]) {
-        process.env[key] = value.replace(/^["']|["']$/g, '');
-      }
+      // .env 优先于继承的 shell 环境变量：本地 shell 里可能残留其他项目导出的
+      // 同名旧值（如 ~/.zprofile 的 AZURE_OPENAI_API_KEY）。镜像不含 .env，
+      // 生产环境仍完全由 Container App 环境变量决定。
+      process.env[key] = value.replace(/^["']|["']$/g, '');
     }
   } catch {}
 }
