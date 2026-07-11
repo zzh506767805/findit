@@ -2,7 +2,7 @@
   "expo": {
     "name": "放哪了",
     "slug": "findit",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -12,7 +12,7 @@
     "ios": {
       "supportsTablet": false,
       "icon": "./assets/icon.png",
-      "buildNumber": "9",
+      "buildNumber": "10",
       "infoPlist": {
         "CFBundleDisplayName": "放哪了",
         "NSCameraUsageDescription": "用于拍摄你主动记录的收纳照片或视频，例如记录抽屉、柜子或房间里的物品位置。",
