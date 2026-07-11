@@ -73,7 +73,10 @@ function serverMsgToLocal(m, apiUrl) {
       contentType: m.media_content_type
     };
   }
-  const steps = Array.isArray(m.steps) ? m.steps.filter((step) => step.type !== 'answer') : [];
+  // 中间轮次的回复保留为工作流步骤，只滤掉与最终回复重复的那条
+  const steps = Array.isArray(m.steps)
+    ? m.steps.filter((step) => step.type !== 'answer' || (step.text && step.text !== m.content))
+    : [];
   return {
     role: 'agent', steps, answer: m.content,
     suggestion: m.suggestion, mediaAssetId: m.media_asset_id,
@@ -340,7 +343,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         uploadIndex: item.index
       });
     }
-    addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, mediaAssetId: null });
+    addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, mediaAssetId: null, streaming: true });
 
     let uploadPath = `/agent/analyze?source=${encodeURIComponent(origin)}&client_day=${encodeURIComponent(localDateKey())}`;
     if (spaceHint) uploadPath += `&space_hint=${encodeURIComponent(spaceHint)}`;
@@ -373,9 +376,14 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         patchLastAgent((m) => ({ ...m, mediaAssetId: m.mediaAssetId || e.media_asset_id }));
       }
       else if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
-        patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
+        patchLastAgent((m) => (e.type === 'tool_call' && m.answer
+          ? { ...m, steps: [...m.steps, { type: 'answer', text: m.answer }, e], answer: null }
+          : { ...m, steps: [...m.steps, e] }));
       else if (e.type === 'answer_delta') patchLastAgent((m) => ({ ...m, answer: e.text || `${m.answer || ''}${e.delta || ''}` }));
-      else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text }));
+      else if (e.type === 'answer') patchLastAgent((m) => (
+        // 该轮文本已随 tool_call 沉淀为步骤时，忽略轮末补发的同文 answer，避免重复
+        m.steps.some((st) => st.type === 'answer' && st.text === e.text) ? m : { ...m, answer: e.text }
+      ));
       else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
       else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
       else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
@@ -407,6 +415,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
       }
     } finally {
+      patchLastAgent((m) => ({ ...m, streaming: false }));
       if (didMutateData) onDataChanged?.();
       setBusy(false);
     }
@@ -488,7 +497,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     if (!q || busy) return;
     setInput('');
     addMsg({ role: 'user', type: 'text', text: q });
-    addMsg({ role: 'agent', steps: [], answer: null, suggestion: null });
+    addMsg({ role: 'agent', steps: [], answer: null, suggestion: null, streaming: true });
     setBusy(true);
     let didMutateData = false;
 
@@ -499,9 +508,14 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
           didMutateData = true;
         }
         if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
-          patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
+          patchLastAgent((m) => (e.type === 'tool_call' && m.answer
+            ? { ...m, steps: [...m.steps, { type: 'answer', text: m.answer }, e], answer: null }
+            : { ...m, steps: [...m.steps, e] }));
         else if (e.type === 'answer_delta') patchLastAgent((m) => ({ ...m, answer: e.text || `${m.answer || ''}${e.delta || ''}` }));
-        else if (e.type === 'answer') patchLastAgent((m) => ({ ...m, answer: e.text }));
+        else if (e.type === 'answer') patchLastAgent((m) => (
+        // 该轮文本已随 tool_call 沉淀为步骤时，忽略轮末补发的同文 answer，避免重复
+        m.steps.some((st) => st.type === 'answer' && st.text === e.text) ? m : { ...m, answer: e.text }
+      ));
         else if (e.type === 'done' && e.suggestion) patchLastAgent((m) => ({ ...m, suggestion: e.suggestion }));
         else if (e.type === 'message_saved') patchLastAgent((m) => ({ ...m, messageId: e.message_id }));
         else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
@@ -509,6 +523,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     } catch (err) {
       patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
     } finally {
+      patchLastAgent((m) => ({ ...m, streaming: false }));
       if (didMutateData) onDataChanged?.();
       setBusy(false);
     }
@@ -640,7 +655,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                     style={({ pressed }) => [s.agentAnswer, pressed && s.agentAnswerPressed]}
                     onLongPress={() => copyAgentAnswer(msg.answer, copyKey)}
                     delayLongPress={350}>
-                    <Markdown style={mdStyles}>{msg.answer}</Markdown>
+                    <Markdown style={msg.streaming ? mdStylesStreaming : mdStyles}>{msg.answer}</Markdown>
                     {copiedAgentKey === copyKey ? (
                       <View style={s.copyHint}>
                         <AppIcon name="check" size={12} color={colors.green} />
@@ -853,4 +868,12 @@ const mdStyles = {
   ordered_list: { marginTop: 2, marginBottom: 2 },
   list_item: { marginTop: 1 },
   code_inline: { backgroundColor: colors.bgRaised, borderRadius: 3, paddingHorizontal: 4, fontSize: 13, color: colors.textSecondary }
+};
+
+// 流式进行中的文字：与工作流过程叙述同款灰色，done 后才切换成正式黑色，
+// 避免中间轮次文本先黑后灰的反向跳变
+const mdStylesStreaming = {
+  ...mdStyles,
+  body: { color: colors.textSecondary, fontSize: 14, lineHeight: 20 },
+  strong: { fontWeight: '700', color: colors.textSecondary }
 };

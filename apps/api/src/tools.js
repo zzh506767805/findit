@@ -1,16 +1,16 @@
-import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, getLatestMediaAssetForPosition, searchItems, updateItem, deleteItem, findPositionsByName, updatePosition, movePositionToSpace, findOrCreateSpace } from './store.js';
+import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, getLatestMediaAssetForPosition, searchItems, updateItem, deleteItem, findPositionsByName, updatePosition, movePositionToSpace, findOrCreateSpace, createFeedback } from './store.js';
 
 export const toolDefinitions = [
   {
     type: 'function',
     name: 'list_spaces',
-    description: '列出用户家中所有空间（房间），返回每个空间的名称、位置数量和物品总数。',
+    description: '列出用户家中所有空间（房间），返回每个空间的名称、位置数量和物品总数。通常不需要调用：系统提示的"当前家庭数据"已包含空间和位置快照。',
     parameters: { type: 'object', properties: {} }
   },
   {
     type: 'function',
     name: 'list_positions',
-    description: '列出某个空间下所有位置（家具/区域）。返回 position_id、物品数量、latest_photo_id。latest_photo_id 是照片ID，可传给 view_photo；position_id 只能传给 get_position_items 或 view_position_photo。',
+    description: '列出某个空间下所有位置（家具/区域）。返回 position_id、物品数量、latest_photo_id。通常不需要调用：系统提示的"当前家庭数据"已包含这些信息。',
     parameters: {
       type: 'object',
       properties: { space_name: { type: 'string', description: '空间名称，如"卧室"' } },
@@ -56,7 +56,7 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'search_items',
-    description: '按关键词搜索物品，同时匹配名称和描述（颜色、品牌、材质等特征）。可多次调用，用不同关键词扩大搜索范围。',
+    description: '按关键词搜索物品，同时匹配名称和描述（颜色、品牌、材质等特征）。注意是子串匹配，类目词（如"感冒药"）搜不到具体品名（如"布洛芬"），要展开成多个候选词并行搜索。',
     parameters: {
       type: 'object',
       properties: { query: { type: 'string', description: '搜索关键词' } },
@@ -108,8 +108,22 @@ export const toolDefinitions = [
   },
   {
     type: 'function',
+    name: 'submit_feedback',
+    description: '记录用户对产品的反馈（bug、建议、抱怨、表扬），供开发团队后续分析。当用户表达对 App 本身的意见时调用，例如"识别老是出错"、"要是能XX就好了"、"这个功能真好用"。直接执行，无需用户确认。',
+    parameters: {
+      type: 'object',
+      properties: {
+        content: { type: 'string', description: '用户反馈的原话，尽量保留原始表述' },
+        category: { type: 'string', enum: ['bug', 'suggestion', 'complaint', 'praise', 'other'], description: '反馈分类' },
+        context: { type: 'string', description: '当时的场景补充，如用户正在做什么、涉及哪个功能（可选）' }
+      },
+      required: ['content']
+    }
+  },
+  {
+    type: 'function',
     name: 'save_items',
-    description: '创建或更新空间、位置、物品。需要用户确认后才写入数据库。可用于拍照识别、手动添加空间/位置/物品等任何场景。',
+    description: '创建或更新空间、位置、物品，提交的是草稿，App 界面会自动让用户确认后写入数据库。可用于拍照识别、手动添加空间/位置/物品等任何场景。直接调用即可，不要先口头询问用户是否保存。',
     parameters: {
       type: 'object',
       properties: {
@@ -131,10 +145,6 @@ export const toolDefinitions = [
         items: {
           type: 'array',
           items: { type: 'object', properties: { name: { type: 'string' }, description: { type: 'string' }, status: { type: 'string', enum: ['existing', 'new', 'missing'] } } }
-        },
-        uncertain_items: {
-          type: 'array',
-          items: { type: 'object', properties: { description: { type: 'string' } } }
         }
       }
     }
@@ -204,6 +214,17 @@ export async function executeTool(toolName, args, userId, uploadDir) {
 
     case 'save_items':
       return { type: 'suggestion', suggestion: args };
+
+    case 'submit_feedback': {
+      const content = String(args.content || '').trim();
+      if (!content) return { error: '反馈内容不能为空' };
+      await createFeedback(userId, {
+        content: content.slice(0, 2000),
+        category: args.category,
+        context: args.context ? String(args.context).slice(0, 1000) : null
+      });
+      return { success: true };
+    }
 
     case 'update_item': {
       const hasSpace = Boolean(args.space_name?.trim?.() || args.space_name);

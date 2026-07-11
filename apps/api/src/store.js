@@ -819,6 +819,15 @@ export async function getMediaAssetById(mediaAssetId) {
 
 // ─── Conversations & Messages ───
 
+export async function createFeedback(userId, { content, category, context }) {
+  const id = newId();
+  await query(
+    `INSERT INTO feedback (id, user_id, content, category, context) VALUES ($1, $2, $3, $4, $5)`,
+    [id, userId, content, category || null, context || null]
+  );
+  return { id };
+}
+
 export async function initConversationTables() {
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS free_credits INTEGER DEFAULT ${DEFAULT_FREE_CREDITS}`).catch(() => {});
   await query(`ALTER TABLE users ALTER COLUMN free_credits SET DEFAULT ${DEFAULT_FREE_CREDITS}`).catch(() => {});
@@ -882,6 +891,14 @@ export async function initConversationTables() {
   await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'assistant'`).catch(() => {});
   await query(`ALTER TABLE messages ADD COLUMN IF NOT EXISTS steps JSONB`).catch(() => {});
   await query(`ALTER TABLE media_assets ADD COLUMN IF NOT EXISTS thumbnail_url TEXT`).catch(() => {});
+  await query(`CREATE TABLE IF NOT EXISTS feedback (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id),
+    content TEXT NOT NULL,
+    category TEXT,
+    context TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )`).catch((err) => console.warn('feedback init:', err.message));
   // Unique constraint on apple_user_id
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_apple_user_id_unique ON users (apple_user_id) WHERE apple_user_id IS NOT NULL`).catch(() => {});
 }

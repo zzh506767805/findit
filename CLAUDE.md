@@ -33,7 +33,7 @@ GitHub: https://github.com/zzh506767805/findit
 - 服务器：findit-db.postgres.database.azure.com
 - 数据库名：findit
 - 用户：finditadmin
-- 核心表：users, spaces, positions, media_assets, items, item_records, conversations, messages, reward_events, iap_transactions
+- 核心表：users, spaces, positions, media_assets, items, item_records, conversations, messages, reward_events, iap_transactions, feedback
 - users 额外字段：apple_user_id, free_credits(默认3), paid_credits, subscription_expires_at, subscription_product_id, invite_code, welcome_claimed_at, invite_redeemed_at, referred_by_user_id
 - messages 额外字段：source（'assistant' 或 'spaces'，标记消息来源页面）
 - 防火墙：allow-dev 开放所有IP（开发阶段），allow-azure 开放 Azure 内部
@@ -140,6 +140,7 @@ Expo App → API (Container Apps) → PostgreSQL
 - update_item — 修改物品（名称/描述/位置；移动需同时传 space_name+position_name，缺一报错）
 - update_position — 重命名位置或把位置整体搬到另一空间（物品自动跟随，目标空间同名位置会报错）
 - delete_item — 删除物品
+- submit_feedback — 记录用户对 App 的反馈（bug/建议/抱怨/表扬），写入 feedback 表供后续分析
 
 ### 数据三层结构
 

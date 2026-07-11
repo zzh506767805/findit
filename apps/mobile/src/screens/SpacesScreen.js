@@ -18,13 +18,14 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 
 import { requestJson } from '../api';
-import { AppIcon, EmptyState } from '../ui';
+import { AppIcon } from '../ui';
 import { colors, radius, shadows } from '../theme';
 import SpaceDetailScreen from './SpaceDetailScreen';
 import OnboardingGuide, { isGuideDone, markGuideDone } from '../components/OnboardingGuide';
 import { getSpaceCoverSource } from '../spaceCovers';
 
 const heroFloorPlanImage = require('../../assets/home-floorplan-wash.jpg');
+const emptyHomeImage = require('../../assets/empty-home.jpg');
 
 function HeroFloorPlan() {
   return (
@@ -288,10 +289,10 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       ) : null}
 
       <View style={s.sectionHead}>
-        <Text style={s.sectionTitle}>我的空间</Text>
+        <Text style={s.sectionTitle}>{hasSpaces ? '我的空间' : '开始记录'}</Text>
         <View style={s.sectionActions}>
-          <Text style={s.sectionMeta}>{hasSpaces ? `${spaces.length} 个` : '待创建'}</Text>
-          {!addingSpace ? (
+          {hasSpaces ? <Text style={s.sectionMeta}>{spaces.length} 个</Text> : null}
+          {hasSpaces && !addingSpace ? (
             <Pressable style={({ pressed }) => [s.sectionAddBtn, pressed && s.pressed]} onPress={() => setAddingSpace(true)}>
               <AppIcon name="plus" size={16} color={colors.text} />
             </Pressable>
@@ -324,7 +325,26 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
           ))}
         </View>
       ) : !addingSpace ? (
-        <EmptyState title="还没有空间" text="点击上方添加空间，或拍照让 AI 自动识别" icon="home" />
+        <View style={s.firstRecordCard}>
+          <Image source={emptyHomeImage} style={s.firstRecordImage} resizeMode="cover" />
+          <View style={s.firstRecordBody}>
+            <Text style={s.firstRecordTitle}>拍一张，自动帮你整理</Text>
+            <Text style={s.firstRecordText}>AI 认出照片里的物品，空间和位置自动建好</Text>
+            <Pressable
+              style={({ pressed }) => [s.firstRecordButton, pressed && s.pressed]}
+              onPress={() => pickAndSend()}
+            >
+              <AppIcon name="camera" size={18} color={colors.white} />
+              <Text style={s.firstRecordButtonText}>拍照记录</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [s.manualSpaceButton, pressed && s.pressed]}
+              onPress={() => setAddingSpace(true)}
+            >
+              <Text style={s.manualSpaceText}>手动添加空间</Text>
+            </Pressable>
+          </View>
+        </View>
       ) : null}
     </ScrollView>
     {showGuide ? (
@@ -427,6 +447,52 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
+  firstRecordCard: {
+    borderRadius: radius.xl,
+    backgroundColor: colors.bgCard,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.line,
+    overflow: 'hidden',
+    ...shadows.card
+  },
+  firstRecordImage: {
+    width: '100%',
+    height: 172,
+    backgroundColor: colors.bgInput
+  },
+  firstRecordBody: {
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 20,
+    paddingBottom: 14
+  },
+  firstRecordTitle: {
+    color: colors.text,
+    fontSize: 19,
+    fontWeight: '800',
+    letterSpacing: -0.3
+  },
+  firstRecordText: {
+    color: colors.textTertiary,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 7,
+    textAlign: 'center'
+  },
+  firstRecordButton: {
+    alignSelf: 'stretch',
+    height: 47,
+    marginTop: 18,
+    borderRadius: radius.full,
+    backgroundColor: colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8
+  },
+  firstRecordButtonText: { color: colors.white, fontSize: 15, fontWeight: '700' },
+  manualSpaceButton: { paddingHorizontal: 14, paddingVertical: 10, marginTop: 5 },
+  manualSpaceText: { color: colors.textTertiary, fontSize: 13, fontWeight: '600' },
   spaceGrid: { gap: 10 },
   spaceCard: {
     overflow: 'hidden',

@@ -17,7 +17,8 @@ const TOOL_LABELS = {
   suggest_save: { icon: 'save', label: '整理数据' },
   update_item: { icon: 'edit-2', label: '修改物品' },
   update_position: { icon: 'edit-3', label: '修正位置' },
-  delete_item: { icon: 'trash-2', label: '删除物品' }
+  delete_item: { icon: 'trash-2', label: '删除物品' },
+  submit_feedback: { icon: 'message-square', label: '记录反馈' }
 };
 
 function formatToolArgs(args) {
@@ -55,6 +56,7 @@ function formatToolResult(tool, result) {
   if (tool === 'update_item') return '已修改';
   if (tool === 'update_position') return result.new_name ? `已改为"${result.new_name}"` : '已修正';
   if (tool === 'delete_item') return '已删除';
+  if (tool === 'submit_feedback') return '已记录，会转给开发团队';
   return null;
 }
 
@@ -67,6 +69,33 @@ function FadeIn({ children, delay = 0 }) {
     return () => clearTimeout(t);
   }, [delay, opacity]);
   return <Animated.View style={{ opacity }}>{children}</Animated.View>;
+}
+
+function resultPhotoUrl(tool, result, apiUrl) {
+  if (tool === 'view_position_photo' || !result) return null;
+  const photoPath = result.preview_url || result.thumbnail_url || result.blob_url;
+  const directPhotoUrl = photoPath ? fullImageUrl(apiUrl, photoPath) : null;
+  const routePhotoUrl = result.media_asset_id
+    ? mediaPreviewUrl(apiUrl, result.media_asset_id, Boolean(result.thumbnail_url))
+    : null;
+  return directPhotoUrl || routePhotoUrl;
+}
+
+// 把每个 tool_call 和它之后第一个同名 tool_result 配成一行；
+// 并行轮次里所有 call 在前、result 在后，所以按工具名向后认领
+function pairSteps(steps) {
+  const consumed = new Set();
+  const entries = steps.map((step, i) => {
+    if (step.type !== 'tool_call') return { step, key: i };
+    for (let j = i + 1; j < steps.length; j++) {
+      if (!consumed.has(j) && steps[j].type === 'tool_result' && steps[j].tool === step.tool) {
+        consumed.add(j);
+        return { step, result: steps[j].result, key: i };
+      }
+    }
+    return { step, key: i };
+  });
+  return entries.filter((entry) => !consumed.has(entry.key));
 }
 
 export default function AgentWorkflow({ steps = [], apiUrl }) {
@@ -84,37 +113,35 @@ export default function AgentWorkflow({ steps = [], apiUrl }) {
 
   return (
     <View style={s.root}>
-      {steps.map((step, i) => {
+      {pairSteps(steps).map(({ step, result, key }, idx) => {
         if (step.type === 'tool_call') {
           const { icon, label } = formatToolLabel(step.tool, step.args);
           const argsText = formatToolArgs(step.args);
+          const summary = formatToolResult(step.tool, result);
+          const photoUrl = resultPhotoUrl(step.tool, result, apiUrl);
           return (
-            <FadeIn key={i} delay={i * 60}>
-              <Pressable disabled={!argsText} onPress={() => toggleStep(i)}>
+            <FadeIn key={key} delay={idx * 60}>
+              <Pressable disabled={!argsText} onPress={() => toggleStep(key)}>
                 <View style={s.stepRow}>
-                  <View style={s.dot} />
                   <AppIcon name={icon} size={12} color={colors.textDim} />
-                  <Text style={s.stepLabel}>{label}</Text>
+                  <Text style={s.stepLabel} numberOfLines={1}>{label}</Text>
+                  {summary ? <Text style={s.resultInline} numberOfLines={1}>· {summary}</Text> : null}
                 </View>
-                {argsText && expandedSteps.has(i) ? (
+                {argsText && expandedSteps.has(key) ? (
                   <Text style={s.argsLine} numberOfLines={2}>{argsText}</Text>
                 ) : null}
               </Pressable>
+              {photoUrl ? <StableImage uri={photoUrl} style={s.thumb} /> : null}
             </FadeIn>
           );
         }
         if (step.type === 'tool_result') {
+          // 没配上对儿的孤立结果（一般不会出现），保持旧样式兜底
           const summary = formatToolResult(step.tool, step.result);
-          const showPhotoPreview = step.tool !== 'view_position_photo';
-          const photoPath = showPhotoPreview ? (step.result?.preview_url || step.result?.thumbnail_url || step.result?.blob_url) : null;
-          const directPhotoUrl = photoPath ? fullImageUrl(apiUrl, photoPath) : null;
-          const routePhotoUrl = showPhotoPreview && step.result?.media_asset_id
-            ? mediaPreviewUrl(apiUrl, step.result.media_asset_id, Boolean(step.result?.thumbnail_url))
-            : null;
-          const photoUrl = directPhotoUrl || routePhotoUrl;
+          const photoUrl = resultPhotoUrl(step.tool, step.result, apiUrl);
           if (!summary && !photoUrl) return null;
           return (
-            <FadeIn key={i} delay={i * 60}>
+            <FadeIn key={key} delay={idx * 60}>
               {summary ? <Text style={s.resultLine}>  → {summary}</Text> : null}
               {photoUrl ? <StableImage uri={photoUrl} style={s.thumb} /> : null}
             </FadeIn>
@@ -122,15 +149,15 @@ export default function AgentWorkflow({ steps = [], apiUrl }) {
         }
         if (step.type === 'thinking') {
           return (
-            <FadeIn key={i} delay={i * 60}>
+            <FadeIn key={key} delay={idx * 60}>
               <Text style={s.thinking}>{step.text}</Text>
             </FadeIn>
           );
         }
         if (step.type === 'answer') {
           return (
-            <FadeIn key={i} delay={i * 60}>
-              <Markdown style={mdStyles}>{step.text}</Markdown>
+            <FadeIn key={key} delay={idx * 60}>
+              <Markdown style={mdStylesInterim}>{step.text}</Markdown>
             </FadeIn>
           );
         }
@@ -143,19 +170,17 @@ export default function AgentWorkflow({ steps = [], apiUrl }) {
 const s = StyleSheet.create({
   root: {
     gap: 5,
-    paddingVertical: 4
+    paddingVertical: 4,
+    paddingLeft: 10,
+    marginBottom: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: colors.line
   },
   stepRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
     paddingVertical: 2
-  },
-  dot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.textDim
   },
   stepLabel: {
     color: colors.textTertiary,
@@ -166,7 +191,7 @@ const s = StyleSheet.create({
     color: colors.textDim,
     fontSize: 11,
     lineHeight: 15,
-    paddingLeft: 22,
+    paddingLeft: 18,
     paddingTop: 1,
     paddingBottom: 2
   },
@@ -175,6 +200,11 @@ const s = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     paddingLeft: 10
+  },
+  resultInline: {
+    color: colors.textTertiary,
+    fontSize: 12,
+    flexShrink: 1
   },
   thumb: {
     width: 72,
@@ -207,4 +237,11 @@ const mdStyles = {
   ordered_list: { marginTop: 2, marginBottom: 2 },
   list_item: { marginTop: 1 },
   code_inline: { backgroundColor: colors.bgInput, borderRadius: 3, paddingHorizontal: 4, fontSize: 13, color: colors.textSecondary },
+};
+
+// 多轮工具间的过程叙述：比最终回复弱一档
+const mdStylesInterim = {
+  ...mdStyles,
+  body: { color: colors.textSecondary, fontSize: 14, lineHeight: 20 },
+  strong: { fontWeight: '700', color: colors.textSecondary },
 };

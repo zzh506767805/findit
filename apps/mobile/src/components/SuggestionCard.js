@@ -49,7 +49,7 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
   if (!suggestion) return null;
 
   const data = editing && draft ? draft : suggestion;
-  const { space, position, items = [], uncertain_items = [] } = data;
+  const { space, position, items = [] } = data;
   const total = items.length;
 
   function startEdit() {
@@ -120,14 +120,6 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
               <Text style={s.addBtnText}>添加物品</Text>
             </Pressable>
           ) : null}
-        </View>
-      ) : null}
-
-      {!editing && uncertain_items.length > 0 ? (
-        <View style={s.uncertain}>
-          {uncertain_items.map((item, i) => (
-            <Text key={i} style={s.uncertainText}>? {item.description}</Text>
-          ))}
         </View>
       ) : null}
 
@@ -266,18 +258,6 @@ const s = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 13,
     fontWeight: '600'
-  },
-  uncertain: {
-    marginHorizontal: 14,
-    marginTop: 8,
-    padding: 10,
-    borderRadius: radius.sm,
-    backgroundColor: colors.bgInput
-  },
-  uncertainText: {
-    color: colors.textDim,
-    fontSize: 13,
-    lineHeight: 18
   },
   footer: {
     flexDirection: 'row',
