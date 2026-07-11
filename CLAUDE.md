@@ -137,7 +137,8 @@ Expo App → API (Container Apps) → PostgreSQL
 - view_photo — 查看历史照片（支持 Blob URL 直传 AI）
 - search_items — 搜索物品（匹配 name + description，支持颜色/品牌等特征）
 - save_items — 创建/更新空间、位置、物品（通用，需用户确认；原 suggest_save）
-- update_item — 修改物品（名称/描述/位置）
+- update_item — 修改物品（名称/描述/位置；移动需同时传 space_name+position_name，缺一报错）
+- update_position — 重命名位置或把位置整体搬到另一空间（物品自动跟随，目标空间同名位置会报错）
 - delete_item — 删除物品
 
 ### 数据三层结构

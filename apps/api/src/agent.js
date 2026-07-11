@@ -436,7 +436,7 @@ export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames,
 
   const tools = toolDefinitions.map((t) => ({ type: t.type, name: t.name, description: t.description, parameters: t.parameters }));
   let suggestion = null;
-  const MAX_ROUNDS = 8;
+  const MAX_ROUNDS = 20;
 
   let prevResponseId = previousResponseId || null;
   const useStreaming = process.env.AZURE_OPENAI_STREAM !== 'false';

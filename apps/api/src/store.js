@@ -634,6 +634,11 @@ export async function updatePosition(userId, posId, name) {
   return rows[0] || null;
 }
 
+export async function movePositionToSpace(userId, posId, spaceId) {
+  const rows = await query('UPDATE positions SET space_id = $1 WHERE id = $2 AND user_id = $3 RETURNING *', [spaceId, posId, userId]);
+  return rows[0] || null;
+}
+
 export async function deletePosition(userId, posId) {
   await query('DELETE FROM item_records WHERE position_id = $1 AND user_id = $2', [posId, userId]);
   await query('DELETE FROM positions WHERE id = $1 AND user_id = $2', [posId, userId]);
