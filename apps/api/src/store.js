@@ -620,6 +620,15 @@ export async function createPosition(spaceId, userId, name) {
   return rows[0];
 }
 
+export async function findPositionsByName(userId, name) {
+  return query(
+    `SELECT p.id, p.name, s.name AS space_name
+     FROM positions p JOIN spaces s ON p.space_id = s.id
+     WHERE p.user_id = $1 AND p.name = $2`,
+    [userId, name]
+  );
+}
+
 export async function updatePosition(userId, posId, name) {
   const rows = await query('UPDATE positions SET name = $1 WHERE id = $2 AND user_id = $3 RETURNING *', [name, posId, userId]);
   return rows[0] || null;

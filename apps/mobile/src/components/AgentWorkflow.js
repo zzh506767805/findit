@@ -1,5 +1,5 @@
-import React, { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import Markdown from 'react-native-markdown-display';
 import { fullImageUrl, mediaPreviewUrl } from '../api';
 import StableImage from './StableImage';
@@ -16,8 +16,19 @@ const TOOL_LABELS = {
   save_items: { icon: 'save', label: '整理数据' },
   suggest_save: { icon: 'save', label: '整理数据' },
   update_item: { icon: 'edit-2', label: '修改物品' },
+  update_position: { icon: 'edit-3', label: '修正位置' },
   delete_item: { icon: 'trash-2', label: '删除物品' }
 };
+
+function formatToolArgs(args) {
+  if (!args || typeof args !== 'object') return null;
+  const entries = Object.entries(args).filter(([, v]) => v !== undefined && v !== null && v !== '');
+  if (!entries.length) return null;
+  const text = entries
+    .map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join(' · ');
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+}
 
 function formatToolLabel(tool, args) {
   const entry = TOOL_LABELS[tool] || { icon: 'cpu', label: tool };
@@ -41,6 +52,9 @@ function formatToolResult(tool, result) {
   if (tool === 'search_items') return `找到 ${result.count || 0} 条记录`;
   if (tool === 'view_photo' || tool === 'view_position_photo') return '已查看';
   if (tool === 'save_items') return '已整理成记录草稿';
+  if (tool === 'update_item') return '已修改';
+  if (tool === 'update_position') return result.new_name ? `已改为"${result.new_name}"` : '已修正';
+  if (tool === 'delete_item') return '已删除';
   return null;
 }
 
@@ -56,19 +70,36 @@ function FadeIn({ children, delay = 0 }) {
 }
 
 export default function AgentWorkflow({ steps = [], apiUrl }) {
+  const [expandedSteps, setExpandedSteps] = useState(() => new Set());
   if (!steps.length) return null;
+
+  function toggleStep(i) {
+    setExpandedSteps((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }
+
   return (
     <View style={s.root}>
       {steps.map((step, i) => {
         if (step.type === 'tool_call') {
           const { icon, label } = formatToolLabel(step.tool, step.args);
+          const argsText = formatToolArgs(step.args);
           return (
             <FadeIn key={i} delay={i * 60}>
-              <View style={s.stepRow}>
-                <View style={s.dot} />
-                <AppIcon name={icon} size={12} color={colors.textDim} />
-                <Text style={s.stepLabel}>{label}</Text>
-              </View>
+              <Pressable disabled={!argsText} onPress={() => toggleStep(i)}>
+                <View style={s.stepRow}>
+                  <View style={s.dot} />
+                  <AppIcon name={icon} size={12} color={colors.textDim} />
+                  <Text style={s.stepLabel}>{label}</Text>
+                </View>
+                {argsText && expandedSteps.has(i) ? (
+                  <Text style={s.argsLine} numberOfLines={2}>{argsText}</Text>
+                ) : null}
+              </Pressable>
             </FadeIn>
           );
         }
@@ -130,6 +161,14 @@ const s = StyleSheet.create({
     color: colors.textTertiary,
     fontSize: 13,
     fontWeight: '500'
+  },
+  argsLine: {
+    color: colors.textDim,
+    fontSize: 11,
+    lineHeight: 15,
+    paddingLeft: 22,
+    paddingTop: 1,
+    paddingBottom: 2
   },
   resultLine: {
     color: colors.textSecondary,

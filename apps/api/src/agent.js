@@ -217,13 +217,13 @@ async function readResponsesStream(response, { onTextDelta, onToolCall } = {}) {
   };
 }
 
-async function callResponsesApi(input, tools, previousResponseId, { stream = false, onTextDelta, onToolCall } = {}) {
+async function callResponsesApi(input, tools, previousResponseId, { stream = false, onTextDelta, onToolCall, toolChoice = 'auto' } = {}) {
   const url = buildResponsesUrl();
   const body = {
     model: process.env.AZURE_OPENAI_DEPLOYMENT,
     input,
     tools,
-    tool_choice: 'auto'
+    tool_choice: toolChoice
   };
   if (stream) body.stream = true;
   if (previousResponseId) body.previous_response_id = previousResponseId;
@@ -459,7 +459,19 @@ export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames,
         emit({ type: 'tool_call', tool: call.name, args: call.arguments });
       }
     } : {};
-    const payload = await callResponsesApi(input, tools, prevResponseId, { stream: useStreaming, ...streamCallbacks });
+    let payload;
+    try {
+      payload = await callResponsesApi(input, tools, prevResponseId, { stream: useStreaming, ...streamCallbacks });
+    } catch (err) {
+      // 上一次会话链上残留了未答复的 function_call（历史 bug 或中途崩溃），丢弃旧链重新开始
+      if (round === 0 && prevResponseId && /No tool output found/i.test(err.message || '')) {
+        console.warn('[agent] broken response chain, retrying without previous_response_id');
+        prevResponseId = null;
+        payload = await callResponsesApi(input, tools, null, { stream: useStreaming, ...streamCallbacks });
+      } else {
+        throw err;
+      }
+    }
     prevResponseId = payload.id || null;
     const { toolCalls, text } = extractOutputs(payload);
     const toolNames = toolCalls.map(c => c.name).join(',') || '-';
@@ -537,6 +549,15 @@ export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames,
     }
 
     input = toolOutputs;
+
+    // 最后一轮仍有工具调用：必须把结果回传并强制收尾，否则会话链会残留未答复的
+    // function_call，后续所有带 previous_response_id 的请求都会 400
+    if (round === MAX_ROUNDS - 1) {
+      const finalPayload = await callResponsesApi(input, tools, prevResponseId, { toolChoice: 'none' });
+      prevResponseId = finalPayload.id || null;
+      const { text: finalText } = extractOutputs(finalPayload);
+      if (finalText) emit({ type: 'answer', text: finalText });
+    }
   }
 
   emit({ type: 'done', suggestion });

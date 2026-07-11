@@ -1,4 +1,4 @@
-import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, getLatestMediaAssetForPosition, searchItems, updateItem, deleteItem } from './store.js';
+import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, getLatestMediaAssetForPosition, searchItems, updateItem, deleteItem, findPositionsByName, updatePosition } from './store.js';
 
 export const toolDefinitions = [
   {
@@ -66,17 +66,31 @@ export const toolDefinitions = [
   {
     type: 'function',
     name: 'update_item',
-    description: '修改物品信息或移动物品到新位置。可改名、改描述、移动到其他空间/位置。直接执行，无需用户确认。',
+    description: '修改单个物品信息或把它移动到新位置。可改名、改描述、移动。移动时 space_name 和 position_name 必须同时提供，目标空间/位置不存在时会自动创建。直接执行，无需用户确认。注意：如果是位置名称本身识别错了（如整批物品归错了位置），应改用 update_position 修正位置名，不要逐个移动物品。',
     parameters: {
       type: 'object',
       properties: {
         item_name: { type: 'string', description: '要修改的物品当前名称' },
         new_name: { type: 'string', description: '新名称（不改则不传）' },
         description: { type: 'string', description: '新描述（不改则不传）' },
-        space_name: { type: 'string', description: '目标空间名（移动时必传）' },
-        position_name: { type: 'string', description: '目标位置名（移动时必传）' }
+        space_name: { type: 'string', description: '目标空间名（移动时必传，与 position_name 成对出现）' },
+        position_name: { type: 'string', description: '目标位置名（移动时必传，与 space_name 成对出现）' }
       },
       required: ['item_name']
+    }
+  },
+  {
+    type: 'function',
+    name: 'update_position',
+    description: '重命名一个位置（家具/收纳点）。用于修正识别错误的位置名称，该位置下的所有物品自动跟随，无需逐个移动。直接执行，无需用户确认。',
+    parameters: {
+      type: 'object',
+      properties: {
+        position_name: { type: 'string', description: '当前位置名称' },
+        new_name: { type: 'string', description: '新位置名称' },
+        space_name: { type: 'string', description: '该位置所属空间名，同名位置存在于多个空间时用来区分（可选）' }
+      },
+      required: ['position_name', 'new_name']
     }
   },
   {
@@ -190,13 +204,41 @@ export async function executeTool(toolName, args, userId, uploadDir) {
     case 'save_items':
       return { type: 'suggestion', suggestion: args };
 
-    case 'update_item':
+    case 'update_item': {
+      const hasSpace = Boolean(args.space_name?.trim?.() || args.space_name);
+      const hasPosition = Boolean(args.position_name?.trim?.() || args.position_name);
+      if (hasSpace !== hasPosition) {
+        return { error: '移动物品必须同时提供 space_name 和 position_name，请补全后重试' };
+      }
       return await updateItem(userId, args.item_name, {
         new_name: args.new_name,
         description: args.description,
         space_name: args.space_name,
         position_name: args.position_name
       });
+    }
+
+    case 'update_position': {
+      const currentName = String(args.position_name || '').trim();
+      const newName = String(args.new_name || '').trim();
+      if (!currentName || !newName) return { error: 'position_name 和 new_name 都不能为空' };
+
+      let matches = await findPositionsByName(userId, currentName);
+      if (args.space_name) {
+        matches = matches.filter((p) => p.space_name === String(args.space_name).trim());
+      }
+      if (!matches.length) return { error: `没有找到位置"${currentName}"` };
+      if (matches.length > 1) {
+        return {
+          error: `有多个空间存在位置"${currentName}"，请传 space_name 指明是哪一个`,
+          candidates: matches.map((p) => ({ space_name: p.space_name, position_name: p.name }))
+        };
+      }
+
+      const updated = await updatePosition(userId, matches[0].id, newName);
+      if (!updated) return { error: '重命名失败' };
+      return { success: true, space_name: matches[0].space_name, old_name: currentName, new_name: newName };
+    }
 
     case 'delete_item':
       return await deleteItem(userId, args.item_name);
