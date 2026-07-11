@@ -224,7 +224,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
     <View style={s.screen}>
     {showDetail && selectedSpace ? (
       <Animated.View style={[s.detailLayer, { transform: [{ translateX: slideAnim }] }]} {...panResponder.panHandlers}>
-        <SpaceDetailScreen session={session} space={selectedSpace}
+        <SpaceDetailScreen session={session} space={selectedSpace} dataVersion={dataVersion}
           onBack={closeSpace}
           onPickMedia={(media) => {
             const payload = Array.isArray(media) ? { assets: media } : media;

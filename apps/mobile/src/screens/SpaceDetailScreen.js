@@ -94,7 +94,7 @@ function DetailLoading({ pos }) {
   );
 }
 
-export default function SpaceDetailScreen({ session, space, onBack, onPickMedia }) {
+export default function SpaceDetailScreen({ session, space, dataVersion, onBack, onPickMedia }) {
   const [positions, setPositions] = useState([]);
   const [expanded, setExpanded] = useState(null);
   const [detailsByPosition, setDetailsByPosition] = useState({});
@@ -113,9 +113,16 @@ export default function SpaceDetailScreen({ session, space, onBack, onPickMedia 
       setPositions(pos);
     } catch {}
     finally { setLoadingPositions(false); }
-  }, [session, space.id]);
+  }, [session, space.id, dataVersion]);
 
   useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    detailRequestId.current += 1;
+    setExpanded(null);
+    setLoadingDetailId(null);
+    setDetailsByPosition({});
+  }, [dataVersion]);
 
   async function toggle(pos) {
     const posId = pos.id;

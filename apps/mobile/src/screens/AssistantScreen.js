@@ -155,6 +155,7 @@ function localDateKey(date = new Date()) {
 }
 
 const DRAFT_MEDIA_LIMIT = 12;
+const DATA_MUTATION_TOOLS = new Set(['update_item', 'update_position', 'delete_item']);
 
 function isVideoAsset(asset) {
   return asset?.type === 'video' || asset?.uri?.match(/\.(mp4|mov|m4v)$/i);
@@ -344,7 +345,11 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     let uploadPath = `/agent/analyze?source=${encodeURIComponent(origin)}&client_day=${encodeURIComponent(localDateKey())}`;
     if (spaceHint) uploadPath += `&space_hint=${encodeURIComponent(spaceHint)}`;
 
+    let didMutateData = false;
     const handleEvent = (e) => {
+      if (e.type === 'tool_result' && DATA_MUTATION_TOOLS.has(e.tool) && !e.result?.error) {
+        didMutateData = true;
+      }
       if (e.type === 'media') {
         const uploadIndex = Number.isInteger(e.index) ? e.index : 0;
         const preparedItem = prepared[uploadIndex] || prepared[0];
@@ -402,6 +407,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
       }
     } finally {
+      if (didMutateData) onDataChanged?.();
       setBusy(false);
     }
   }
@@ -484,10 +490,14 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     addMsg({ role: 'user', type: 'text', text: q });
     addMsg({ role: 'agent', steps: [], answer: null, suggestion: null });
     setBusy(true);
+    let didMutateData = false;
 
     try {
       const queryPath = `/agent/query?client_day=${encodeURIComponent(localDateKey())}`;
       await streamAgent(session.apiUrl, session.token, queryPath, { query: q }, (e) => {
+        if (e.type === 'tool_result' && DATA_MUTATION_TOOLS.has(e.tool) && !e.result?.error) {
+          didMutateData = true;
+        }
         if (e.type === 'tool_call' || e.type === 'tool_result' || e.type === 'thinking')
           patchLastAgent((m) => ({ ...m, steps: [...m.steps, e] }));
         else if (e.type === 'answer_delta') patchLastAgent((m) => ({ ...m, answer: e.text || `${m.answer || ''}${e.delta || ''}` }));
@@ -498,7 +508,10 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
       });
     } catch (err) {
       patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
-    } finally { setBusy(false); }
+    } finally {
+      if (didMutateData) onDataChanged?.();
+      setBusy(false);
+    }
   }
 
   async function sendComposer() {

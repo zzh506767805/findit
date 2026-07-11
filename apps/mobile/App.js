@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  AppState,
   Easing,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -109,6 +111,13 @@ export default function App() {
   const [tab, setTab] = useState('spaces');
   const [error, setError] = useState('');
   const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState !== 'active') Keyboard.dismiss();
+    });
+    return () => subscription.remove();
+  }, []);
 
   useEffect(() => {
     // Warm up network: triggers iOS local network permission dialog early
@@ -265,6 +274,7 @@ export default function App() {
     if (next === tab) return;
     const idx = tabs.findIndex((t) => t.id === next);
     progress.stopAnimation();
+    if (next === 'spaces') setDataVersion((v) => v + 1);
     setTab(next);
     Animated.timing(progress, {
       toValue: idx,

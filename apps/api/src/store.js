@@ -574,6 +574,8 @@ export async function updateSpace(userId, spaceId, name) {
 export async function deleteSpace(userId, spaceId) {
   // Delete all item_records under this space's positions
   await query(`DELETE FROM item_records WHERE position_id IN (SELECT id FROM positions WHERE space_id = $1 AND user_id = $2)`, [spaceId, userId]);
+  // 照片与位置解绑（保留照片本身），否则 media_assets_position_id_fkey 会阻止删除
+  await query(`UPDATE media_assets SET position_id = NULL WHERE position_id IN (SELECT id FROM positions WHERE space_id = $1 AND user_id = $2)`, [spaceId, userId]);
   await query('DELETE FROM positions WHERE space_id = $1 AND user_id = $2', [spaceId, userId]);
   await query('DELETE FROM spaces WHERE id = $1 AND user_id = $2', [spaceId, userId]);
 }
@@ -641,6 +643,7 @@ export async function movePositionToSpace(userId, posId, spaceId) {
 
 export async function deletePosition(userId, posId) {
   await query('DELETE FROM item_records WHERE position_id = $1 AND user_id = $2', [posId, userId]);
+  await query('UPDATE media_assets SET position_id = NULL WHERE position_id = $1 AND user_id = $2', [posId, userId]);
   await query('DELETE FROM positions WHERE id = $1 AND user_id = $2', [posId, userId]);
 }
 
