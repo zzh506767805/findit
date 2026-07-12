@@ -353,7 +353,7 @@ const en = {
 
   sd_no_items: 'No items yet',
   sd_items_count: '{count} items',
-  sd_items_with_first: '{first} +{count} more',
+  sd_items_with_first: '{first} +{more} more',
   sd_meta: '{positions} spots · {items} items',
   sd_empty_title: 'No spots yet',
   sd_empty_text: 'Add a spot, or snap a photo and let AI set it up',

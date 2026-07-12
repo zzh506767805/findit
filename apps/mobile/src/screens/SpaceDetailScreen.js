@@ -25,7 +25,7 @@ function formatPositionItems(pos) {
   if (!count) return t('sd_no_items');
   if (!firstItem) return t('sd_items_count', { count });
   if (count === 1) return firstItem;
-  return t('sd_items_with_first', { first: firstItem, count });
+  return t('sd_items_with_first', { first: firstItem, count, more: count - 1 });
 }
 
 function isVideoContent(contentType) {

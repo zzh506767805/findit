@@ -5,7 +5,7 @@ import { fullImageUrl, mediaPreviewUrl } from '../api';
 import StableImage from './StableImage';
 import { AppIcon } from '../ui';
 import { colors, radius } from '../theme';
-import { t } from '../strings';
+import { apiErrorMessage, t } from '../strings';
 
 const TOOL_LABELS = {
   list_spaces: { icon: 'globe', labelKey: 'tool_list_spaces' },
@@ -42,7 +42,8 @@ function formatToolLabel(tool, args) {
 
 function formatToolResult(tool, result) {
   if (!result) return null;
-  if (result.error) return result.error;
+  // 后端工具错误是中文文案；带 code 时英文用户按 code 查字典，查不到再显示原文
+  if (result.error) return apiErrorMessage({ message: result.error, code: result.code });
   if (tool === 'list_spaces') {
     return Array.isArray(result) && result.length ? result.map((s) => s.name).join('、') : t('wf_no_records');
   }
