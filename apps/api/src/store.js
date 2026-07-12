@@ -158,6 +158,17 @@ export async function requireUser(userId) {
   throw Object.assign(new Error('User not found'), { status: 401 });
 }
 
+export async function touchUserSeen(userId, { ip, language } = {}) {
+  await query(
+    `UPDATE users SET
+      last_ip = COALESCE($2, last_ip),
+      last_language = COALESCE($3, last_language),
+      last_seen_at = now()
+    WHERE id = $1`,
+    [userId, ip || null, language || null]
+  );
+}
+
 export async function deleteUserAccount(userId) {
   const client = await pool().connect();
   try {
@@ -842,6 +853,9 @@ export async function initConversationTables() {
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS welcome_claimed_at TIMESTAMPTZ`).catch(() => {});
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by_user_id UUID REFERENCES users(id)`).catch(() => {});
   await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_redeemed_at TIMESTAMPTZ`).catch(() => {});
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_ip TEXT`).catch(() => {});
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_language TEXT`).catch(() => {});
+  await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ`).catch(() => {});
   await query(`CREATE UNIQUE INDEX IF NOT EXISTS users_invite_code_unique ON users (invite_code) WHERE invite_code IS NOT NULL`).catch(() => {});
   await query(`CREATE TABLE IF NOT EXISTS reward_events (
     id UUID PRIMARY KEY,

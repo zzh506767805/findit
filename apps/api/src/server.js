@@ -23,7 +23,8 @@ import {
   initConversationTables, getOrCreateConversation, createConversation,
   getConversationMessages, createMessage, updateMessageConfirmed,
   updateConversationResponseId,
-  updateItem, deleteItem, getMediaAssetById
+  updateItem, deleteItem, getMediaAssetById,
+  touchUserSeen
 } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -372,6 +373,21 @@ function getUserId(req) {
   return null;
 }
 
+// 用户地区/语言统计：记录最近一次请求的 IP 和 Accept-Language，内存节流每用户 10 分钟一次
+const userSeenTouchedAt = new Map();
+function touchUserStats(req, userId) {
+  if (!userId) return;
+  const last = userSeenTouchedAt.get(userId) || 0;
+  if (Date.now() - last < 10 * 60 * 1000) return;
+  userSeenTouchedAt.set(userId, Date.now());
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const ip = forwarded || req.socket?.remoteAddress || null;
+  const language = req.headers['accept-language']
+    ? String(req.headers['accept-language']).slice(0, 64)
+    : null;
+  touchUserSeen(userId, { ip, language }).catch(() => {});
+}
+
 // ─── Azure Blob Storage (see blob.js) ───
 
 async function saveBufferWithName(buffer, blobName, contentType) {
@@ -715,6 +731,7 @@ async function route(req, res) {
   }
 
   const user = await requireUser(getUserId(req));
+  touchUserStats(req, user.id);
 
   if (method === 'GET' && url.pathname === '/user/credits') {
     const credits = await getUserCredits(user.id);

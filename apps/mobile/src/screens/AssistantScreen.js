@@ -11,14 +11,15 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  View
+  View,
+  useWindowDimensions
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Clipboard from 'expo-clipboard';
 import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { fullImageUrl, mediaImageUrl, mediaPreviewUrl, requestJson } from '../api';
+import { fullImageUrl, mediaPreviewUrl, requestJson } from '../api';
 import { streamAgent, streamAgentUploadBatch } from '../sse';
 import StableImage from '../components/StableImage';
 import { AppIcon } from '../ui';
@@ -234,6 +235,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
   const [copiedAgentKey, setCopiedAgentKey] = useState(null);
   const [photoView, setPhotoView] = useState(null);
   const insets = useSafeAreaInsets();
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
   const creditTotal = Number(credits?.total ?? ((credits?.free || 0) + (credits?.paid || 0)));
   const todayKey = localDateKey();
 
@@ -789,13 +791,25 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
 
         {photoView ? (
           <Modal transparent visible animationType="fade" onRequestClose={() => setPhotoView(null)}>
-            <Pressable style={s.photoViewerBackdrop} onPress={() => setPhotoView(null)}>
-              <Image source={{ uri: mediaImageUrl(session.apiUrl, photoView.id, 'original') }}
-                style={s.photoViewerImage} resizeMode="contain" />
+            <View style={s.photoViewerBackdrop}>
+              <ScrollView
+                contentContainerStyle={s.photoViewerScroll}
+                maximumZoomScale={4} minimumZoomScale={1} bouncesZoom
+                showsHorizontalScrollIndicator={false} showsVerticalScrollIndicator={false}>
+                <Pressable onPress={() => setPhotoView(null)}>
+                  {/* 复用卡片同款缩略图 URL：已在缓存里秒开，避免跨境拉几 MB 原图黑屏 */}
+                  <Image source={{ uri: mediaPreviewUrl(session.apiUrl, photoView.id, true) }}
+                    style={{ width: winWidth, height: winHeight * 0.86 }} resizeMode="contain" />
+                </Pressable>
+              </ScrollView>
+              <Pressable style={[s.photoViewerClose, { top: insets.top + 12 }]}
+                onPress={() => setPhotoView(null)} hitSlop={10}>
+                <AppIcon name="x" size={22} color={colors.white} />
+              </Pressable>
               {photoView.location ? (
-                <Text style={s.photoViewerCaption}>{photoView.location}</Text>
+                <Text style={s.photoViewerCaption} pointerEvents="none">{photoView.location}</Text>
               ) : null}
-            </Pressable>
+            </View>
           </Modal>
         ) : null}
     </View>
@@ -868,12 +882,18 @@ const s = StyleSheet.create({
     color: colors.textSecondary, fontSize: 11,
     paddingHorizontal: 8, paddingVertical: 5
   },
-  photoViewerBackdrop: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.92)',
-    alignItems: 'center', justifyContent: 'center'
+  photoViewerBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.94)' },
+  photoViewerScroll: { flexGrow: 1, alignItems: 'center', justifyContent: 'center' },
+  photoViewerClose: {
+    position: 'absolute', right: 16,
+    width: 36, height: 36, borderRadius: 18,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)'
   },
-  photoViewerImage: { width: '100%', height: '78%' },
-  photoViewerCaption: { color: colors.white, fontSize: 13, marginTop: 12 },
+  photoViewerCaption: {
+    position: 'absolute', bottom: 40, alignSelf: 'center',
+    color: colors.white, fontSize: 13
+  },
   copyHint: {
     flexDirection: 'row',
     alignItems: 'center',
