@@ -373,6 +373,14 @@ function getUserId(req) {
   return null;
 }
 
+// 请求语言：取 Accept-Language 首个 locale 的主语言标签（en-US,en;q=0.9 → en），
+// 只给模型干净的语言码；取不到默认 zh。不要用 users 表的 last_language（10 分钟节流的统计快照）
+function parseLanguage(req) {
+  const first = String(req.headers['accept-language'] || '').split(',')[0].trim();
+  const primary = first.split(/[-_;]/)[0].toLowerCase();
+  return /^[a-z]{2,3}$/.test(primary) ? primary : 'zh';
+}
+
 // 用户地区/语言统计：记录最近一次请求的 IP 和 Accept-Language，内存节流每用户 10 分钟一次
 const userSeenTouchedAt = new Map();
 function touchUserStats(req, userId) {
@@ -516,14 +524,14 @@ const ALLOWED_MIME_RE = /^(image\/(jpeg|png|gif|webp|heic|heif)|video\/(mp4|quic
 async function parseMultipart(req) {
   const contentType = req.headers['content-type'] || '';
   const boundaryMatch = contentType.match(/boundary=([^\s;]+)/);
-  if (!boundaryMatch) throw Object.assign(new Error('No multipart boundary'), { status: 400 });
+  if (!boundaryMatch) throw Object.assign(new Error('No multipart boundary'), { status: 400, code: 'INVALID_REQUEST' });
   const boundary = boundaryMatch[1];
 
   const chunks = [];
   let totalSize = 0;
   for await (const chunk of req) {
     totalSize += chunk.length;
-    if (totalSize > MAX_UPLOAD_BYTES) throw Object.assign(new Error('File too large (max 50MB)'), { status: 413 });
+    if (totalSize > MAX_UPLOAD_BYTES) throw Object.assign(new Error('File too large (max 50MB)'), { status: 413, code: 'FILE_TOO_LARGE' });
     chunks.push(chunk);
   }
   const body = Buffer.concat(chunks);
@@ -651,21 +659,21 @@ async function route(req, res) {
         : 'image/jpeg';
       return sendFile(res, 200, file, contentType);
     } catch {
-      return sendJson(res, 404, { error: 'File not found' });
+      return sendJson(res, 404, { error: 'File not found', code: 'NOT_FOUND' });
     }
   }
 
   if (method === 'GET' && /^\/media\/[^/]+\/(thumb|original)$/.test(url.pathname)) {
     const [, mediaId, variant] = url.pathname.match(/^\/media\/([^/]+)\/(thumb|original)$/);
     const asset = await getMediaAssetById(mediaId);
-    if (!asset) return sendJson(res, 404, { error: 'Media not found' });
+    if (!asset) return sendJson(res, 404, { error: 'Media not found', code: 'NOT_FOUND' });
 
     // thumb 缺失时图片资产回退原图（视频不能当图片渲染，仍返回 404）
     const isVideoAsset = (asset.content_type || '').startsWith('video');
     const mediaUrl = variant === 'thumb'
       ? (asset.thumbnail_url || (isVideoAsset ? null : asset.blob_url))
       : asset.blob_url;
-    if (!mediaUrl) return sendJson(res, 404, { error: 'Media variant not found' });
+    if (!mediaUrl) return sendJson(res, 404, { error: 'Media variant not found', code: 'NOT_FOUND' });
 
     if (mediaUrl.startsWith('https://')) {
       return redirectMedia(res, getBlobSasUrl(mediaUrl));
@@ -683,16 +691,16 @@ async function route(req, res) {
           'Cache-Control': 'public, max-age=86400, immutable'
         });
       } catch {
-        return sendJson(res, 404, { error: 'Media file not found' });
+        return sendJson(res, 404, { error: 'Media file not found', code: 'NOT_FOUND' });
       }
     }
 
-    return sendJson(res, 404, { error: 'Unsupported media URL' });
+    return sendJson(res, 404, { error: 'Unsupported media URL', code: 'NOT_FOUND' });
   }
 
   if (method === 'POST' && url.pathname === '/auth/login') {
     if (IS_PRODUCTION) {
-      return sendJson(res, 404, { error: 'Not found' });
+      return sendJson(res, 404, { error: 'Not found', code: 'NOT_FOUND' });
     }
     const body = await readJson(req);
     const user = await getOrCreateDemoUser(body.email || 'demo@findit.local');
@@ -704,23 +712,23 @@ async function route(req, res) {
   if (method === 'POST' && url.pathname === '/auth/apple') {
     const body = await readJson(req);
     const { appleUserId, email, fullName, identityToken } = body;
-    if (!appleUserId) return sendJson(res, 400, { error: 'appleUserId is required' });
+    if (!appleUserId) return sendJson(res, 400, { error: 'appleUserId is required', code: 'INVALID_REQUEST' });
 
     // 验证 identityToken（生产环境强制，开发环境可跳过）
     if (identityToken) {
       try {
         const applePayload = await verifyAppleIdentityToken(identityToken);
         if (applePayload.sub !== appleUserId) {
-          return sendJson(res, 401, { error: 'Token subject mismatch' });
+          return sendJson(res, 401, { error: 'Token subject mismatch', code: 'AUTH_FAILED' });
         }
       } catch (err) {
         if (IS_PRODUCTION) {
-          return sendJson(res, 401, { error: `Apple token verification failed: ${err.message}` });
+          return sendJson(res, 401, { error: `Apple token verification failed: ${err.message}`, code: 'AUTH_FAILED' });
         }
         console.warn('[auth] Apple token verification skipped in dev:', err.message);
       }
     } else if (IS_PRODUCTION) {
-      return sendJson(res, 400, { error: 'identityToken is required' });
+      return sendJson(res, 400, { error: 'identityToken is required', code: 'INVALID_REQUEST' });
     }
 
     const name = fullName || (email ? email.split('@')[0] : 'User');
@@ -785,14 +793,14 @@ async function route(req, res) {
         productId: body?.productId || null,
         transactionId: body?.transactionId || null
       });
-      return sendJson(res, 400, { error: 'receiptData is required' });
+      return sendJson(res, 400, { error: 'receiptData is required', code: 'INVALID_REQUEST' });
     }
     try {
       const { productId, transactionId, originalTransactionId, expiresAt } = await verifyAppleReceipt(body.receiptData);
       const annualProduct = ANNUAL_PRODUCTS[productId];
       if (annualProduct) {
         if (expiresAt && new Date(expiresAt).getTime() <= Date.now()) {
-          return sendJson(res, 403, { error: '订阅已过期，请重新开通年卡' });
+          return sendJson(res, 403, { error: '订阅已过期，请重新开通年卡', code: 'SUBSCRIPTION_EXPIRED' });
         }
 
         const result = await recordIapAnnualPurchase(user.id, {
@@ -812,14 +820,14 @@ async function route(req, res) {
       }
 
       const creditsToAdd = LEGACY_PRODUCT_CREDITS[productId];
-      if (!creditsToAdd) return sendJson(res, 400, { error: `Unknown product: ${productId}` });
+      if (!creditsToAdd) return sendJson(res, 400, { error: `Unknown product: ${productId}`, code: 'INVALID_REQUEST' });
       await addCredits(user.id, creditsToAdd);
       const credits = await getUserCredits(user.id);
       console.log(`[iap] user=${user.id} product=${productId} tx=${transactionId} credits=+${creditsToAdd}`);
       return sendJson(res, 200, { ...credits, productId, transactionId });
     } catch (err) {
       console.error('[iap] verification failed:', err.message);
-      return sendJson(res, 403, { error: err.message });
+      return sendJson(res, 403, { error: err.message, code: 'IAP_VERIFICATION_FAILED' });
     }
   }
 
@@ -850,7 +858,7 @@ async function route(req, res) {
 
   if (method === 'POST' && url.pathname === '/spaces') {
     const body = await readJson(req);
-    if (!body.name?.trim()) return sendJson(res, 400, { error: '空间名称不能为空' });
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '空间名称不能为空', code: 'EMPTY_NAME' });
     const space = await createSpace(user.id, body.name.trim());
     return sendJson(res, 200, space);
   }
@@ -858,9 +866,9 @@ async function route(req, res) {
   if (method === 'PUT' && /^\/spaces\/[^/]+$/.test(url.pathname)) {
     const spaceId = url.pathname.split('/')[2];
     const body = await readJson(req);
-    if (!body.name?.trim()) return sendJson(res, 400, { error: '空间名称不能为空' });
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '空间名称不能为空', code: 'EMPTY_NAME' });
     const space = await updateSpace(user.id, spaceId, body.name.trim());
-    if (!space) return sendJson(res, 404, { error: 'Space not found' });
+    if (!space) return sendJson(res, 404, { error: 'Space not found', code: 'NOT_FOUND' });
     return sendJson(res, 200, space);
   }
 
@@ -879,7 +887,7 @@ async function route(req, res) {
   if (method === 'POST' && /^\/spaces\/[^/]+\/positions$/.test(url.pathname)) {
     const spaceId = url.pathname.split('/')[2];
     const body = await readJson(req);
-    if (!body.name?.trim()) return sendJson(res, 400, { error: '位置名称不能为空' });
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '位置名称不能为空', code: 'EMPTY_NAME' });
     const position = await createPosition(spaceId, user.id, body.name.trim());
     return sendJson(res, 200, position);
   }
@@ -887,9 +895,9 @@ async function route(req, res) {
   if (method === 'PUT' && /^\/positions\/[^/]+$/.test(url.pathname)) {
     const posId = url.pathname.split('/')[2];
     const body = await readJson(req);
-    if (!body.name?.trim()) return sendJson(res, 400, { error: '位置名称不能为空' });
+    if (!body.name?.trim()) return sendJson(res, 400, { error: '位置名称不能为空', code: 'EMPTY_NAME' });
     const pos = await updatePosition(user.id, posId, body.name.trim());
-    if (!pos) return sendJson(res, 404, { error: 'Position not found' });
+    if (!pos) return sendJson(res, 404, { error: 'Position not found', code: 'NOT_FOUND' });
     return sendJson(res, 200, pos);
   }
 
@@ -902,7 +910,7 @@ async function route(req, res) {
   if (method === 'GET' && /^\/positions\/[^/]+\/detail$/.test(url.pathname)) {
     const posId = url.pathname.split('/')[2];
     const detail = await getPositionDetail(posId, user.id);
-    if (!detail) return sendJson(res, 404, { error: 'Position not found' });
+    if (!detail) return sendJson(res, 404, { error: 'Position not found', code: 'NOT_FOUND' });
     return sendJson(res, 200, detail);
   }
 
@@ -929,7 +937,7 @@ async function route(req, res) {
     // 在解析/上传文件之前先做额度检查：余额（只读预检，正式扣减仍在上传成功后）和每日配额，
     // 避免超限用户白白消耗上传和存储成本
     const preCredits = await getUserCredits(user.id);
-    if (preCredits.total <= 0) return sendJson(res, 403, { error: '免费体验已用完，请开通会员继续使用' });
+    if (preCredits.total <= 0) return sendJson(res, 403, { error: '免费体验已用完，请开通会员继续使用', code: 'INSUFFICIENT_CREDITS' });
     await consumeDailyAiQuota(user.id, 'analyze');
 
     const ct = req.headers['content-type'] || '';
@@ -943,12 +951,12 @@ async function route(req, res) {
       log('multipart parsed');
       queryText = String(parts.query || parts.text || '').trim();
       const files = Array.isArray(parts.file) ? parts.file : (parts.file ? [parts.file] : []);
-      if (!files.length) return sendJson(res, 400, { error: 'file is required' });
+      if (!files.length) return sendJson(res, 400, { error: 'file is required', code: 'FILE_REQUIRED' });
 
       for (const file of files) {
-        if (!file?.buffer) return sendJson(res, 400, { error: 'file is required' });
+        if (!file?.buffer) return sendJson(res, 400, { error: 'file is required', code: 'FILE_REQUIRED' });
         if (file.contentType && !ALLOWED_MIME_RE.test(file.contentType)) {
-          return sendJson(res, 400, { error: 'Unsupported file type' });
+          return sendJson(res, 400, { error: 'Unsupported file type', code: 'UNSUPPORTED_FILE_TYPE' });
         }
       }
 
@@ -960,7 +968,7 @@ async function route(req, res) {
         if (item.isVideo) {
           const frames = await extractVideoFrames(item.buffer);
           log(`video frames extracted ${i + 1}/${files.length}: ${frames.length}`);
-          if (!frames.length) return sendJson(res, 400, { error: 'Failed to extract frames from video' });
+          if (!frames.length) return sendJson(res, 400, { error: 'Failed to extract frames from video', code: 'VIDEO_PROCESSING_FAILED' });
           item.thumbnailUrl = await saveVideoThumbnail(frames[0], item.mediaId);
           item.videoFrames = frames;
         } else {
@@ -984,7 +992,7 @@ async function route(req, res) {
     } else {
       // Legacy: JSON base64 upload
       const body = await readJson(req);
-      if (!body.imageBase64) return sendJson(res, 400, { error: 'imageBase64 is required' });
+      if (!body.imageBase64) return sendJson(res, 400, { error: 'imageBase64 is required', code: 'INVALID_REQUEST' });
       queryText = String(body.query || body.text || '').trim();
       saved = await saveBase64Image({ imageBase64: body.imageBase64, mimeType: body.mimeType || 'image/jpeg' });
       imageBase64 = saved.buffer.toString('base64');
@@ -1065,6 +1073,7 @@ async function route(req, res) {
         uploadDir: UPLOAD_DIR,
         previousResponseId: conv.last_response_id,
         spaceHint,
+        userLanguage: parseLanguage(req),
         onEvent: (event) => {
           sendSse(res, event.type, event);
           if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
@@ -1097,8 +1106,8 @@ async function route(req, res) {
   if (method === 'POST' && url.pathname === '/agent/query') {
     const body = await readJson(req);
     const queryText = String(body.query || '').trim();
-    if (!queryText) return sendJson(res, 400, { error: '请输入内容' });
-    if (queryText.length > 500) return sendJson(res, 400, { error: '内容太长了，请精简到 500 字以内' });
+    if (!queryText) return sendJson(res, 400, { error: '请输入内容', code: 'EMPTY_QUERY' });
+    if (queryText.length > 500) return sendJson(res, 400, { error: '内容太长了，请精简到 500 字以内', code: 'QUERY_TOO_LONG' });
     await consumeDailyAiQuota(user.id, 'query');
     const clientDay = clientDayFromRequest(url, body);
 
@@ -1123,6 +1132,7 @@ async function route(req, res) {
         userId: user.id,
         uploadDir: UPLOAD_DIR,
         previousResponseId: conv.last_response_id,
+        userLanguage: parseLanguage(req),
         onEvent: (event) => {
           sendSse(res, event.type, event);
           if (event.type === 'tool_call' || event.type === 'tool_result' || event.type === 'answer') agentSteps.push(event);
@@ -1154,14 +1164,14 @@ async function route(req, res) {
   if (method === 'POST' && url.pathname === '/agent/confirm') {
     const body = await readJson(req);
     const { suggestion, media_asset_id, message_id } = body;
-    if (!suggestion) return sendJson(res, 400, { error: 'suggestion is required' });
+    if (!suggestion) return sendJson(res, 400, { error: 'suggestion is required', code: 'INVALID_REQUEST' });
 
     const result = await confirmAndSave(user.id, suggestion, media_asset_id);
     if (message_id) await updateMessageConfirmed(message_id, user.id);
     return sendJson(res, 200, result);
   }
 
-  return sendJson(res, 404, { error: 'Not found' });
+  return sendJson(res, 404, { error: 'Not found', code: 'NOT_FOUND' });
 }
 
 await initConversationTables().catch(err => console.warn('DB table init:', err.message));
@@ -1170,7 +1180,10 @@ const server = createServer((req, res) => {
   route(req, res).catch((error) => {
     const status = error.status || 500;
     if (!res.headersSent) {
-      sendJson(res, status, { error: error.message || 'Internal server error' });
+      sendJson(res, status, {
+        error: error.message || 'Internal server error',
+        code: error.code || (status >= 500 ? 'INTERNAL_ERROR' : 'INVALID_REQUEST')
+      });
     } else {
       try { sendSse(res, 'error', { error: error.message }); res.end(); } catch {}
     }

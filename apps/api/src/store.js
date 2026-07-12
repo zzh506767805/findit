@@ -8,6 +8,8 @@ function pool() {
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.DATABASE_SSL === 'false' ? false : { rejectUnauthorized: false }
     });
+    // 空闲连接被 Azure PG 掐断时 pg.Pool 会 emit error；不处理会把整个进程带崩
+    _pool.on('error', (err) => console.warn('[pg] idle client error:', err.message));
   }
   return _pool;
 }
@@ -92,7 +94,7 @@ function formatCreditsRow(row) {
 
 async function ensureInviteCode(userId) {
   const current = await query('SELECT invite_code FROM users WHERE id = $1', [userId]);
-  if (!current.length) throw Object.assign(new Error('User not found'), { status: 401 });
+  if (!current.length) throw Object.assign(new Error('User not found'), { status: 401, code: 'AUTH_FAILED' });
   if (current[0].invite_code) return current[0].invite_code;
 
   for (let i = 0; i < 8; i++) {
@@ -108,7 +110,7 @@ async function ensureInviteCode(userId) {
     }
   }
 
-  throw Object.assign(new Error('邀请码生成失败，请稍后再试'), { status: 500 });
+  throw Object.assign(new Error('邀请码生成失败，请稍后再试'), { status: 500, code: 'INTERNAL_ERROR' });
 }
 
 async function insertRewardEvent(client, { userId, source, credits, relatedUserId }) {
@@ -152,10 +154,10 @@ export async function getOrCreateAppleUser(appleUserId, email, name) {
 }
 
 export async function requireUser(userId) {
-  if (!userId) throw Object.assign(new Error('User not found'), { status: 401 });
+  if (!userId) throw Object.assign(new Error('User not found'), { status: 401, code: 'AUTH_FAILED' });
   const rows = await query('SELECT * FROM users WHERE id = $1', [userId]);
   if (rows.length) return rows[0];
-  throw Object.assign(new Error('User not found'), { status: 401 });
+  throw Object.assign(new Error('User not found'), { status: 401, code: 'AUTH_FAILED' });
 }
 
 export async function touchUserSeen(userId, { ip, language } = {}) {
@@ -205,7 +207,7 @@ export async function getUserBenefits(userId) {
      FROM users WHERE id = $1`,
     [userId]
   );
-  if (!rows.length) throw Object.assign(new Error('User not found'), { status: 401 });
+  if (!rows.length) throw Object.assign(new Error('User not found'), { status: 401, code: 'AUTH_FAILED' });
   const user = rows[0];
 
   return {
@@ -237,7 +239,7 @@ export async function claimWelcomeBenefit(userId) {
        FROM users WHERE id = $1 FOR UPDATE`,
       [userId]
     );
-    if (!userRows.rows.length) throw Object.assign(new Error('User not found'), { status: 401 });
+    if (!userRows.rows.length) throw Object.assign(new Error('User not found'), { status: 401, code: 'AUTH_FAILED' });
 
     let granted = false;
     if (!userRows.rows[0].welcome_claimed_at) {
@@ -281,7 +283,7 @@ export async function claimWelcomeBenefit(userId) {
 
 export async function redeemInviteCode(userId, inviteCodeInput) {
   const inviteCode = normalizeInviteCode(inviteCodeInput);
-  if (!inviteCode) throw Object.assign(new Error('请输入邀请码'), { status: 400 });
+  if (!inviteCode) throw Object.assign(new Error('请输入邀请码'), { status: 400, code: 'EMPTY_INVITE_CODE' });
 
   await ensureInviteCode(userId);
 
@@ -294,13 +296,13 @@ export async function redeemInviteCode(userId, inviteCodeInput) {
        FROM users WHERE id = $1 FOR UPDATE`,
       [userId]
     );
-    if (!userRows.rows.length) throw Object.assign(new Error('User not found'), { status: 401 });
+    if (!userRows.rows.length) throw Object.assign(new Error('User not found'), { status: 401, code: 'AUTH_FAILED' });
     const currentUser = userRows.rows[0];
     if (currentUser.invite_redeemed_at) {
-      throw Object.assign(new Error('你已经兑换过邀请码'), { status: 409 });
+      throw Object.assign(new Error('你已经兑换过邀请码'), { status: 409, code: 'INVITE_ALREADY_REDEEMED' });
     }
     if (currentUser.invite_code === inviteCode) {
-      throw Object.assign(new Error('不能填写自己的邀请码'), { status: 400 });
+      throw Object.assign(new Error('不能填写自己的邀请码'), { status: 400, code: 'INVITE_OWN_CODE' });
     }
 
     const inviterRows = await client.query(
@@ -308,7 +310,7 @@ export async function redeemInviteCode(userId, inviteCodeInput) {
       [inviteCode]
     );
     if (!inviterRows.rows.length) {
-      throw Object.assign(new Error('邀请码不存在'), { status: 404 });
+      throw Object.assign(new Error('邀请码不存在'), { status: 404, code: 'INVITE_CODE_NOT_FOUND' });
     }
     const inviter = inviterRows.rows[0];
 
@@ -380,7 +382,7 @@ export async function consumeCredit(userId) {
   );
   if (paidRows.length) return 'paid';
 
-  throw Object.assign(new Error('免费体验已用完，请开通会员继续使用'), { status: 403 });
+  throw Object.assign(new Error('免费体验已用完，请开通会员继续使用'), { status: 403, code: 'INSUFFICIENT_CREDITS' });
 }
 
 export async function refundCredit(userId, type) {
@@ -423,7 +425,7 @@ export async function consumeDailyAiQuota(userId, kind) {
   if (count > limit) {
     const label = kind === 'analyze' ? '识别' : '对话';
     const hint = isMember ? '请明天再试' : '请明天再试，开通会员可提高上限';
-    throw Object.assign(new Error(`今日${label}次数已达上限（${limit} 次/天），${hint}`), { status: 429 });
+    throw Object.assign(new Error(`今日${label}次数已达上限（${limit} 次/天），${hint}`), { status: 429, code: 'DAILY_LIMIT_REACHED' });
   }
   return { count, limit };
 }
@@ -439,14 +441,14 @@ export async function refundDailyAiQuota(userId, kind) {
 
 async function applyAnnualSubscription(client, userId, { credits, productId, expiresAt }) {
   const amount = Number(credits || 0);
-  if (!amount || amount < 0) throw Object.assign(new Error('Invalid credits amount'), { status: 400 });
+  if (!amount || amount < 0) throw Object.assign(new Error('Invalid credits amount'), { status: 400, code: 'INVALID_REQUEST' });
 
   const userRows = await client.query(
     `SELECT paid_credits, subscription_expires_at
      FROM users WHERE id = $1 FOR UPDATE`,
     [userId]
   );
-  if (!userRows.rows.length) throw Object.assign(new Error('User not found'), { status: 401 });
+  if (!userRows.rows.length) throw Object.assign(new Error('User not found'), { status: 401, code: 'AUTH_FAILED' });
 
   const now = new Date();
   const current = userRows.rows[0];
@@ -1025,7 +1027,7 @@ async function findItemByNameOrId(userId, itemNameOrId) {
 export async function updateItem(userId, itemNameOrId, updates) {
   const lookupName = String(itemNameOrId || '').trim();
   const item = await findItemByNameOrId(userId, lookupName);
-  if (!item) return { error: `没有找到物品"${lookupName}"` };
+  if (!item) return { error: `没有找到物品"${lookupName}"`, code: 'ITEM_NOT_FOUND' };
 
   // Update name/description on items table
   if (updates.new_name) {
@@ -1051,7 +1053,7 @@ export async function updateItem(userId, itemNameOrId, updates) {
 export async function deleteItem(userId, itemNameOrId) {
   const lookupName = String(itemNameOrId || '').trim();
   const item = await findItemByNameOrId(userId, lookupName);
-  if (!item) return { error: `没有找到物品"${lookupName}"` };
+  if (!item) return { error: `没有找到物品"${lookupName}"`, code: 'ITEM_NOT_FOUND' };
 
   await query('DELETE FROM item_records WHERE item_id = $1 AND user_id = $2', [item.id, userId]);
   await query('DELETE FROM items WHERE id = $1 AND user_id = $2', [item.id, userId]);
