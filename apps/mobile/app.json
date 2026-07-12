@@ -9,6 +9,11 @@
     "assetBundlePatterns": [
       "**/*"
     ],
+    "locales": {
+      "zh": "./locales/zh.json",
+      "zh-Hans": "./locales/zh.json",
+      "en": "./locales/en.json"
+    },
     "ios": {
       "supportsTablet": false,
       "icon": "./assets/icon.png",

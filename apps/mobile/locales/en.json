@@ -1,0 +1,6 @@
+{
+  "CFBundleDisplayName": "FindIt",
+  "NSCameraUsageDescription": "Used to take photos or videos you choose to record, such as capturing where items are kept in a drawer, cabinet, or room.",
+  "NSPhotoLibraryUsageDescription": "Used to select photos or videos you choose to upload, such as importing photos of cabinets, boxes, or rooms to record item locations.",
+  "NSMicrophoneUsageDescription": "Used to record audio in videos you take, such as describing item locations while filming a cabinet or drawer."
+}

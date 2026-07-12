@@ -1,0 +1,6 @@
+{
+  "CFBundleDisplayName": "放哪了",
+  "NSCameraUsageDescription": "用于拍摄你主动记录的收纳照片或视频，例如记录抽屉、柜子或房间里的物品位置。",
+  "NSPhotoLibraryUsageDescription": "用于选择你主动上传的收纳照片或视频，例如从相册导入柜子、箱子或房间照片来记录物品位置。",
+  "NSMicrophoneUsageDescription": "用于录制你主动拍摄的收纳视频中的声音，例如边拍柜子或抽屉边说明物品位置。"
+}
