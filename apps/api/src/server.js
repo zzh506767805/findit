@@ -644,7 +644,11 @@ async function route(req, res) {
     const asset = await getMediaAssetById(mediaId);
     if (!asset) return sendJson(res, 404, { error: 'Media not found' });
 
-    const mediaUrl = variant === 'thumb' ? asset.thumbnail_url : asset.blob_url;
+    // thumb 缺失时图片资产回退原图（视频不能当图片渲染，仍返回 404）
+    const isVideoAsset = (asset.content_type || '').startsWith('video');
+    const mediaUrl = variant === 'thumb'
+      ? (asset.thumbnail_url || (isVideoAsset ? null : asset.blob_url))
+      : asset.blob_url;
     if (!mediaUrl) return sendJson(res, 404, { error: 'Media variant not found' });
 
     if (mediaUrl.startsWith('https://')) {

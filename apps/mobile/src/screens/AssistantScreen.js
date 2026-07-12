@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -16,7 +18,7 @@ import * as Clipboard from 'expo-clipboard';
 import Markdown from 'react-native-markdown-display';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { fullImageUrl, mediaPreviewUrl, requestJson } from '../api';
+import { fullImageUrl, mediaImageUrl, mediaPreviewUrl, requestJson } from '../api';
 import { streamAgent, streamAgentUploadBatch } from '../sse';
 import StableImage from '../components/StableImage';
 import { AppIcon } from '../ui';
@@ -186,6 +188,37 @@ function DraftMediaThumb({ item, onRemove }) {
   );
 }
 
+// 从工具结果里挑出答案提到的物品对应的位置照片（steps 已持久化，历史消息同样适用）
+function foundItemPhotos(msg) {
+  if (!msg.answer || !msg.steps?.length) return [];
+  const answer = msg.answer.toLowerCase();
+  const candidates = [];
+  for (const step of msg.steps) {
+    if (step.type !== 'tool_result' || !step.result) continue;
+    if (step.tool === 'search_items' && Array.isArray(step.result.results)) {
+      for (const r of step.result.results) {
+        if (r.media_asset_id) candidates.push({ id: r.media_asset_id, name: r.item_name, location: r.location_path });
+      }
+    } else if (step.tool === 'get_position_items' && Array.isArray(step.result.items)) {
+      for (const r of step.result.items) {
+        if (r.media_asset_id) candidates.push({ id: r.media_asset_id, name: r.name, location: null });
+      }
+    }
+  }
+  let picked = candidates.filter((c) => c.name && answer.includes(String(c.name).toLowerCase()));
+  // 答案没复述物品名时，若所有结果指向同一张照片也可以放心展示
+  if (!picked.length && new Set(candidates.map((c) => c.id)).size === 1) picked = candidates.slice(0, 1);
+  const seen = new Set();
+  const photos = [];
+  for (const c of picked) {
+    if (seen.has(c.id)) continue;
+    seen.add(c.id);
+    photos.push(c);
+    if (photos.length >= 3) break;
+  }
+  return photos;
+}
+
 export default function AssistantScreen({ session, onDataChanged, credits, isActive = true, onNeedCredits, onCreditsChanged, pendingMedia, onPendingMediaConsumed }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -199,6 +232,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
   const loadedHistoryKeyRef = useRef(null);
   const copyTimerRef = useRef(null);
   const [copiedAgentKey, setCopiedAgentKey] = useState(null);
+  const [photoView, setPhotoView] = useState(null);
   const insets = useSafeAreaInsets();
   const creditTotal = Number(credits?.total ?? ((credits?.free || 0) + (credits?.paid || 0)));
   const todayKey = localDateKey();
@@ -644,6 +678,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
           }
           if (msg.role === 'agent') {
             const copyKey = msg.messageId || i;
+            const answerPhotos = msg.streaming ? [] : foundItemPhotos(msg);
             return (
               <View key={i} style={s.agentRow}>
                 {msg.steps?.length > 0 ? <AgentWorkflow steps={msg.steps} apiUrl={session.apiUrl} /> : null}
@@ -655,7 +690,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                     style={({ pressed }) => [s.agentAnswer, pressed && s.agentAnswerPressed]}
                     onLongPress={() => copyAgentAnswer(msg.answer, copyKey)}
                     delayLongPress={350}>
-                    <Markdown style={msg.streaming ? mdStylesStreaming : mdStyles}>{msg.answer}</Markdown>
+                    <Markdown style={mdStyles}>{msg.answer}</Markdown>
                     {copiedAgentKey === copyKey ? (
                       <View style={s.copyHint}>
                         <AppIcon name="check" size={12} color={colors.green} />
@@ -663,6 +698,19 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                       </View>
                     ) : null}
                   </Pressable>
+                ) : null}
+                {answerPhotos.length > 0 ? (
+                  <View style={s.answerPhotoRow}>
+                    {answerPhotos.map((p) => (
+                      <Pressable key={p.id} style={({ pressed }) => [s.answerPhotoCard, pressed && s.pressed]}
+                        onPress={() => setPhotoView(p)}>
+                        <StableImage uri={mediaPreviewUrl(session.apiUrl, p.id, true)} style={s.answerPhoto} />
+                        {p.location ? (
+                          <Text style={s.answerPhotoCaption} numberOfLines={1}>{p.location}</Text>
+                        ) : null}
+                      </Pressable>
+                    ))}
+                  </View>
                 ) : null}
                 {msg.suggestion && !msg.confirmed ? (
                   <SuggestionCard suggestion={msg.suggestion}
@@ -738,6 +786,18 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
             </Pressable>
           </View>
         </View>
+
+        {photoView ? (
+          <Modal transparent visible animationType="fade" onRequestClose={() => setPhotoView(null)}>
+            <Pressable style={s.photoViewerBackdrop} onPress={() => setPhotoView(null)}>
+              <Image source={{ uri: mediaImageUrl(session.apiUrl, photoView.id, 'original') }}
+                style={s.photoViewerImage} resizeMode="contain" />
+              {photoView.location ? (
+                <Text style={s.photoViewerCaption}>{photoView.location}</Text>
+              ) : null}
+            </Pressable>
+          </Modal>
+        ) : null}
     </View>
   );
 }
@@ -798,6 +858,22 @@ const s = StyleSheet.create({
     paddingVertical: 4
   },
   agentAnswerPressed: { opacity: 0.76 },
+  answerPhotoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  answerPhotoCard: {
+    width: 148, borderRadius: radius.md, overflow: 'hidden',
+    backgroundColor: colors.bgInput, ...shadows.card
+  },
+  answerPhoto: { width: '100%', height: 110 },
+  answerPhotoCaption: {
+    color: colors.textSecondary, fontSize: 11,
+    paddingHorizontal: 8, paddingVertical: 5
+  },
+  photoViewerBackdrop: {
+    flex: 1, backgroundColor: 'rgba(0,0,0,0.92)',
+    alignItems: 'center', justifyContent: 'center'
+  },
+  photoViewerImage: { width: '100%', height: '78%' },
+  photoViewerCaption: { color: colors.white, fontSize: 13, marginTop: 12 },
   copyHint: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -870,10 +946,3 @@ const mdStyles = {
   code_inline: { backgroundColor: colors.bgRaised, borderRadius: 3, paddingHorizontal: 4, fontSize: 13, color: colors.textSecondary }
 };
 
-// 流式进行中的文字：与工作流过程叙述同款灰色，done 后才切换成正式黑色，
-// 避免中间轮次文本先黑后灰的反向跳变
-const mdStylesStreaming = {
-  ...mdStyles,
-  body: { color: colors.textSecondary, fontSize: 14, lineHeight: 20 },
-  strong: { fontWeight: '700', color: colors.textSecondary }
-};
