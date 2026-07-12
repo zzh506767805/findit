@@ -7,24 +7,25 @@ let InAppPurchases = null;
 try { InAppPurchases = require('expo-in-app-purchases'); } catch {}
 import { requestJson } from '../api';
 import { colors, radius } from '../theme';
+import { apiErrorMessage, formatDate, t } from '../strings';
 
 const PRODUCTS = [
   {
     id: 'fangnale_yearly',
-    label: '标准版',
-    price: '¥68/年',
+    label: t('pw_plan_standard'),
+    price: t('pw_price_standard'),
     credits: 1000,
-    desc: '一年会员，适合多数家庭；可持续拍照或录像识别、保存物品位置，并用文字查找。',
-    cta: '开通',
+    desc: t('pw_desc_standard'),
+    cta: t('pw_cta'),
     primary: true
   },
   {
     id: 'fangnale_yearly_large',
-    label: '大户型版',
-    price: '¥128/年',
+    label: t('pw_plan_large'),
+    price: t('pw_price_large'),
     credits: 3000,
-    desc: '一年会员，适合多房间或物品更多的家庭；包含更多媒体识别额度和完整查找功能。',
-    cta: '开通'
+    desc: t('pw_desc_large'),
+    cta: t('pw_cta')
   }
 ];
 const PRODUCT_IDS = PRODUCTS.map(p => p.id);
@@ -33,9 +34,9 @@ const PURCHASE_HISTORY_FALLBACK_DELAYS_MS = [700, 1600, 3200];
 const STORE_TIMEOUT_MS = 10000;
 
 const PRODUCT_LABELS = {
-  welcome_trial: '新人会员',
-  fangnale_yearly: '标准版',
-  fangnale_yearly_large: '大户型版'
+  welcome_trial: t('pw_plan_welcome'),
+  fangnale_yearly: t('pw_plan_standard'),
+  fangnale_yearly_large: t('pw_plan_large')
 };
 
 function readSubscription(credits) {
@@ -46,13 +47,6 @@ function readSubscription(credits) {
     expiresAt: subscription.expires_at || null,
     productId: subscription.product_id || null
   };
-}
-
-function formatDate(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
 }
 
 function readReceiptData(purchase) {
@@ -144,14 +138,14 @@ export default function PaywallScreen({
     : Math.max(insets.bottom || 0, initialInsets.bottom || 0);
   const subscription = readSubscription(credits);
   const hasPaidPlan = subscription.active;
-  const activePlanName = PRODUCT_LABELS[subscription.productId] || '年卡';
-  const planLabel = hasPaidPlan ? `Pro ${activePlanName}` : (subscription.expired ? '会员已过期' : '免费版');
+  const activePlanName = PRODUCT_LABELS[subscription.productId] || t('pw_plan_annual');
+  const planLabel = hasPaidPlan ? `Pro ${activePlanName}` : (subscription.expired ? t('pw_plan_expired') : t('pw_plan_free'));
   const expiresDateText = formatDate(subscription.expiresAt);
   const planMeta = hasPaidPlan
-    ? `${expiresDateText || '一年后'}到期`
+    ? t('pw_expires', { date: expiresDateText || t('pw_one_year_later') })
     : subscription.expired
-      ? (expiresDateText ? `已于 ${expiresDateText} 到期` : '会员有效期已结束')
-      : `v${appVersion} · 可开通年卡`;
+      ? (expiresDateText ? t('pw_expired_on', { date: expiresDateText }) : t('pw_expired_generic'))
+      : t('pw_meta_free', { version: appVersion });
   const welcomeDays = Number(benefits?.rewards?.welcome_days || 15);
   const ownCode = benefits?.invite_code || '------';
   const claimed = Boolean(benefits?.welcome?.claimed);
@@ -167,7 +161,7 @@ export default function PaywallScreen({
     let mounted = true;
     (async () => {
       try {
-        if (!InAppPurchases) throw new Error('当前版本未包含内购模块');
+        if (!InAppPurchases) throw new Error(t('pw_iap_missing'));
         await connectToStore();
         if (!mounted) return;
 
@@ -187,11 +181,11 @@ export default function PaywallScreen({
           } else if (responseCode === InAppPurchases.IAPResponseCode.DEFERRED) {
             purchaseFlowRef.current.canceled = true;
             setLoading(false);
-            Alert.alert('购买待批准', 'App Store 已收到请求，等待批准后会自动生效。');
+            Alert.alert(t('pw_purchase_pending_title'), t('pw_purchase_pending_msg'));
           } else {
             purchaseFlowRef.current.canceled = true;
             setLoading(false);
-            Alert.alert('购买失败', 'App Store 暂时无法完成购买，请稍后再试。');
+            Alert.alert(t('pw_purchase_failed'), t('pw_purchase_failed_msg'));
           }
         });
 
@@ -199,7 +193,7 @@ export default function PaywallScreen({
       } catch (err) {
         if (mounted) {
           setStoreReady(true);
-          setStoreError('商店商品暂时不可用');
+          setStoreError(t('pw_store_unavailable'));
         }
         console.warn('[iap] connect error:', err.message);
       }
@@ -215,7 +209,7 @@ export default function PaywallScreen({
   async function connectToStore() {
     if (connectedRef.current) return;
     try {
-      await withTimeout(InAppPurchases.connectAsync(), STORE_TIMEOUT_MS, '连接 App Store 超时');
+      await withTimeout(InAppPurchases.connectAsync(), STORE_TIMEOUT_MS, t('pw_store_connect_timeout'));
     } catch (err) {
       if (!String(err?.message || '').includes('Already connected')) throw err;
     }
@@ -224,7 +218,7 @@ export default function PaywallScreen({
 
   async function queryStoreProducts() {
     if (Platform.OS === 'web' || __DEV__) return [];
-    if (!InAppPurchases) throw new Error('当前版本未包含内购模块');
+    if (!InAppPurchases) throw new Error(t('pw_iap_missing'));
 
     setStoreLoading(true);
     setStoreError('');
@@ -233,15 +227,15 @@ export default function PaywallScreen({
       const { responseCode, results } = await withTimeout(
         InAppPurchases.getProductsAsync(PRODUCT_IDS),
         STORE_TIMEOUT_MS,
-        '读取 App Store 商品超时'
+        t('pw_store_read_timeout')
       );
       const products = Array.isArray(results) ? results : [];
       if (responseCode !== InAppPurchases.IAPResponseCode.OK) {
-        throw new Error('商店商品查询失败');
+        throw new Error(t('pw_store_query_failed'));
       }
       setStoreProducts(products);
       setStoreReady(true);
-      if (!products.length) setStoreError('商店商品还未准备好');
+      if (!products.length) setStoreError(t('pw_store_not_ready'));
       return products;
     } finally {
       setStoreLoading(false);
@@ -291,7 +285,7 @@ export default function PaywallScreen({
       if (!receiptData) {
         console.warn('[iap] receipt unavailable', purchaseDebugSummary(purchase));
         if (showMissingReceiptAlert) {
-          Alert.alert('缺少购买凭证', 'App Store 没有返回 receipt，请点“恢复购买”重试；如果仍失败，需要安装最新 TestFlight 构建再测。');
+          Alert.alert(t('pw_receipt_missing_title'), t('pw_receipt_missing_msg'));
         }
         setLoading(false);
         return;
@@ -316,11 +310,11 @@ export default function PaywallScreen({
       purchaseFlowRef.current.handled = true;
       setLoading(false);
       await onPurchase?.(result);
-      Alert.alert(result.alreadyProcessed ? '购买已恢复' : '开通成功', result.subscription?.expires_at ? `会员有效期至 ${formatDate(result.subscription.expires_at)}` : '一年会员权益已开通');
+      Alert.alert(result.alreadyProcessed ? t('pw_restored') : t('pw_activated'), result.subscription?.expires_at ? t('pw_valid_until', { date: formatDate(result.subscription.expires_at) }) : t('pw_activated_msg'));
       finishTransactionAfterUnlock(purchaseToFinish);
     } catch (err) {
       if (purchaseKey) processedPurchaseKeysRef.current.delete(purchaseKey);
-      Alert.alert('验证失败', err.message);
+      Alert.alert(t('pw_verify_failed'), apiErrorMessage(err));
       setLoading(false);
     }
   }
@@ -343,7 +337,7 @@ export default function PaywallScreen({
 
     if (!purchaseFlowRef.current.handled && !purchaseFlowRef.current.canceled) {
       setLoading(false);
-      Alert.alert('购买待确认', 'App Store 已完成支付，但购买凭证还没同步。请点“恢复购买”刷新会员状态。');
+      Alert.alert(t('pw_purchase_unconfirmed_title'), t('pw_purchase_unconfirmed_msg'));
     }
   }
 
@@ -369,7 +363,7 @@ export default function PaywallScreen({
         });
         setLoading(false);
         await onPurchase?.(result);
-        Alert.alert('开通成功', result.subscription?.expires_at ? `会员有效期至 ${formatDate(result.subscription.expires_at)}` : '一年会员权益已开通');
+        Alert.alert(t('pw_activated'), result.subscription?.expires_at ? t('pw_valid_until', { date: formatDate(result.subscription.expires_at) }) : t('pw_activated_msg'));
         return;
       }
 
@@ -377,7 +371,7 @@ export default function PaywallScreen({
 
       const storeProduct = await ensureStoreProduct(product.id);
       if (!storeProduct) {
-        Alert.alert('商品未就绪', `App Store 暂时没有返回 ${product.id}，请稍后再试。`);
+        Alert.alert(t('pw_product_not_ready_title'), t('pw_product_not_ready_msg', { id: product.id }));
         setLoading(false);
         return;
       }
@@ -391,9 +385,9 @@ export default function PaywallScreen({
       setLoading(false);
       const message = String(err?.message || '');
       if (message.includes('Must query item from store') || message.includes('E_ITEM_NOT_QUERIED')) {
-        Alert.alert('商品还在加载', '请稍后再试。');
+        Alert.alert(t('pw_product_loading_title'), t('try_later'));
       } else {
-        Alert.alert('购买失败', message || '请稍后再试');
+        Alert.alert(t('pw_purchase_failed'), apiErrorMessage(err));
       }
     }
   }
@@ -402,7 +396,7 @@ export default function PaywallScreen({
     setLoading(true);
     try {
       if (__DEV__) {
-        setNotice('开发模式无需恢复购买');
+        setNotice(t('pw_dev_no_restore'));
         return;
       }
       if (!connectedRef.current) await connectToStore();
@@ -414,10 +408,10 @@ export default function PaywallScreen({
       if (purchase) {
         await handleReceiptValidation(purchase);
       } else {
-        Alert.alert('无可恢复的购买');
+        Alert.alert(t('pw_nothing_restore'));
       }
     } catch (err) {
-      Alert.alert('恢复失败', err.message);
+      Alert.alert(t('pw_restore_failed'), apiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -429,10 +423,10 @@ export default function PaywallScreen({
     setNotice('');
     try {
       const result = await onClaim?.();
-      if (result?.granted === false) setNotice('你已经领取过新人会员');
-      else setNotice(`已领取 ${welcomeDays} 天新人会员`);
+      if (result?.granted === false) setNotice(t('bf_already_claimed'));
+      else setNotice(t('bf_claim_ok', { days: welcomeDays }));
     } catch (err) {
-      Alert.alert('领取失败', err.message);
+      Alert.alert(t('bf_claim_failed'), apiErrorMessage(err));
     } finally {
       setBenefitBusy(null);
     }
@@ -445,9 +439,9 @@ export default function PaywallScreen({
     try {
       await onRedeem?.(inputValue);
       setInviteCode('');
-      setNotice('兑换成功，邀请奖励已到账');
+      setNotice(t('bf_redeem_ok'));
     } catch (err) {
-      Alert.alert('兑换失败', err.message);
+      Alert.alert(t('bf_redeem_failed'), apiErrorMessage(err));
     } finally {
       setBenefitBusy(null);
     }
@@ -455,11 +449,11 @@ export default function PaywallScreen({
 
   async function handleShareCode() {
     if (!benefits?.invite_code) return;
-    const shareText = `我的放哪了邀请码：${ownCode}，填写后我们各得额外奖励`;
+    const shareText = t('bf_share_text', { code: ownCode });
     try {
       if (Platform.OS === 'web' && navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(ownCode);
-        setNotice('邀请码已复制');
+        setNotice(t('bf_code_copied'));
         return;
       }
       await Share.share({ message: shareText });
@@ -478,10 +472,10 @@ export default function PaywallScreen({
   }
 
   function getActionText(product) {
-    if (loading) return '处理中';
+    if (loading) return t('pw_processing');
     if (Platform.OS !== 'web' && !__DEV__) {
-      if (storeLoading || !storeReady) return '请稍候';
-      if (!isStoreProductAvailable(product)) return '稍后重试';
+      if (storeLoading || !storeReady) return t('pw_wait');
+      if (!isStoreProductAvailable(product)) return t('pw_retry_later');
     }
     return product.cta;
   }
@@ -495,7 +489,7 @@ export default function PaywallScreen({
     try {
       await Linking.openURL(url);
     } catch {
-      Alert.alert('无法打开链接', url);
+      Alert.alert(t('open_link_failed'), url);
     }
   }
 
@@ -505,23 +499,23 @@ export default function PaywallScreen({
       try {
         await onLogout?.();
       } catch (err) {
-        Alert.alert('退出失败', err.message);
+        Alert.alert(t('ac_logout_failed'), apiErrorMessage(err));
       } finally {
         setLoading(false);
       }
     };
 
     if (Platform.OS === 'web') {
-      if (window.confirm('确定退出登录吗？数据仍会保留在你的账号中。')) run();
+      if (window.confirm(t('web_logout_confirm'))) run();
       return;
     }
 
     Alert.alert(
-      '退出登录',
-      '退出后需要重新登录才能查看你的记录，数据不会被删除。',
+      t('ac_logout'),
+      t('ac_logout_msg'),
       [
-        { text: '取消', style: 'cancel' },
-        { text: '退出登录', onPress: run }
+        { text: t('cancel'), style: 'cancel' },
+        { text: t('ac_logout'), onPress: run }
       ]
     );
   }
@@ -532,23 +526,23 @@ export default function PaywallScreen({
       try {
         await onDeleteAccount?.();
       } catch (err) {
-        Alert.alert('删除失败', err.message);
+        Alert.alert(t('delete_failed'), apiErrorMessage(err));
       } finally {
         setLoading(false);
       }
     };
 
     if (Platform.OS === 'web') {
-      if (window.confirm('确定删除账号和已保存的数据吗？此操作无法撤销。')) run();
+      if (window.confirm(t('web_delete_account_confirm'))) run();
       return;
     }
 
     Alert.alert(
-      '删除账号和数据',
-      '删除后，你的账号、照片/视频记录、空间、位置、物品和对话内容将从服务中移除。此操作无法撤销。',
+      t('ac_delete_title'),
+      t('ac_delete_msg'),
       [
-        { text: '取消', style: 'cancel' },
-        { text: '确认删除', style: 'destructive', onPress: run }
+        { text: t('cancel'), style: 'cancel' },
+        { text: t('ac_confirm_delete'), style: 'destructive', onPress: run }
       ]
     );
   }
@@ -569,10 +563,10 @@ export default function PaywallScreen({
             <View style={s.planOptionCopy}>
               <View style={s.planOptionTitleRow}>
                 <Text style={s.planOptionLabel}>{p.label}</Text>
-                {p.primary ? <Text style={s.planBadge}>推荐</Text> : null}
+                {p.primary ? <Text style={s.planBadge}>{t('pw_badge_recommend')}</Text> : null}
               </View>
               <Text style={s.planOptionDesc}>{p.desc}</Text>
-              <Text style={s.planOptionRenew}>自动续订，可在 Apple ID 订阅管理中取消。</Text>
+              <Text style={s.planOptionRenew}>{t('pw_auto_renew')}</Text>
             </View>
             <View style={s.planOptionSide}>
               <Text style={s.planOptionPrice}>{getDisplayPrice(p)}</Text>
@@ -587,11 +581,11 @@ export default function PaywallScreen({
         ))}
         <View style={s.legalLinks}>
           <Pressable onPress={() => openLegal('/privacy')} hitSlop={8}>
-            <Text style={s.legalLinkText}>隐私政策</Text>
+            <Text style={s.legalLinkText}>{t('pw_privacy')}</Text>
           </Pressable>
           <Text style={s.legalDot}>·</Text>
           <Pressable onPress={() => openLegal('/terms')} hitSlop={8}>
-            <Text style={s.legalLinkText}>用户协议</Text>
+            <Text style={s.legalLinkText}>{t('pw_terms')}</Text>
           </Pressable>
         </View>
         {storeError ? <Text style={s.storeNotice}>{storeError}</Text> : null}
@@ -602,7 +596,7 @@ export default function PaywallScreen({
   return (
     <View style={[s.container, { paddingTop: topInset, paddingBottom: bottomInset }]}>
       <View style={s.header}>
-        <Text style={s.pageTitle}>我的</Text>
+        <Text style={s.pageTitle}>{t('pw_page_title')}</Text>
         <Pressable style={({ pressed }) => [s.closeBtn, pressed && s.pressed]} onPress={onClose} hitSlop={12}>
           <Feather name="x" size={20} color={colors.text} />
         </Pressable>
@@ -615,7 +609,7 @@ export default function PaywallScreen({
               <Feather name={hasPaidPlan ? 'shield' : 'user'} size={18} color={colors.white} />
             </View>
             <View style={s.summaryItem}>
-              <Text style={s.summaryLabel}>当前版本</Text>
+              <Text style={s.summaryLabel}>{t('pw_current_plan')}</Text>
               <Text style={s.summaryValue}>{planLabel}</Text>
               <Text style={s.summaryMeta}>{planMeta}</Text>
             </View>
@@ -628,7 +622,7 @@ export default function PaywallScreen({
             >
               <Feather name={showPlanOptions ? 'chevron-up' : 'arrow-up-circle'} size={16} color={colors.white} />
               <Text style={s.memberPrimaryActionText} numberOfLines={1}>
-                {showPlanOptions ? '收起方案' : hasPaidPlan ? '升级方案' : '开通会员'}
+                {showPlanOptions ? t('pw_collapse') : hasPaidPlan ? t('pw_upgrade') : t('pw_subscribe')}
               </Text>
             </Pressable>
             <Pressable
@@ -636,7 +630,7 @@ export default function PaywallScreen({
               onPress={handleRestore}
               disabled={loading}
             >
-              <Text style={s.memberSecondaryActionText}>恢复购买</Text>
+              <Text style={s.memberSecondaryActionText}>{t('pw_restore')}</Text>
             </Pressable>
           </View>
           {showPlanOptions ? renderPlanOptions() : null}
@@ -646,8 +640,8 @@ export default function PaywallScreen({
           <View style={s.benefitHeader}>
             <Feather name="gift" size={18} color="#2F7D5B" />
             <View>
-              <Text style={s.sectionTitle}>新人福利</Text>
-              <Text style={s.sectionMeta}>领取会员、邀请码奖励都在这里</Text>
+              <Text style={s.sectionTitle}>{t('bf_section')}</Text>
+              <Text style={s.sectionMeta}>{t('bf_section_meta')}</Text>
             </View>
           </View>
 
@@ -656,8 +650,8 @@ export default function PaywallScreen({
               <Feather name={claimed ? 'check' : 'zap'} size={17} color={claimed ? colors.white : '#2F7D5B'} />
             </View>
             <View style={s.benefitRowCopy}>
-              <Text style={s.benefitRowTitle}>{claimed ? '新人会员已领取' : '领取新人会员'}</Text>
-              <Text style={s.sectionMeta}>{claimed ? '会员权益已到账' : `可领取 ${welcomeDays} 天新人会员`}</Text>
+              <Text style={s.benefitRowTitle}>{claimed ? t('bf_claimed_title') : t('bf_claim_title')}</Text>
+              <Text style={s.sectionMeta}>{claimed ? t('bf_claimed_meta') : t('bf_claim_meta', { days: welcomeDays })}</Text>
             </View>
             <Pressable
               style={({ pressed }) => [
@@ -669,7 +663,7 @@ export default function PaywallScreen({
               disabled={claimed || benefitBusy === 'claim'}
             >
               <Text style={[s.rowActionText, claimed && s.rowActionTextDone]}>
-                {claimed ? '已领取' : benefitBusy === 'claim' ? '领取中' : '领取'}
+                {claimed ? t('bf_claimed') : benefitBusy === 'claim' ? t('bf_claiming') : t('bf_claim')}
               </Text>
             </Pressable>
           </View>
@@ -681,7 +675,7 @@ export default function PaywallScreen({
               <Feather name="copy" size={17} color="#2F7D5B" />
             </View>
             <View style={s.benefitRowCopy}>
-              <Text style={s.benefitRowTitle}>我的邀请码</Text>
+              <Text style={s.benefitRowTitle}>{t('bf_my_code')}</Text>
               <Text style={s.inviteCodeText}>{ownCode}</Text>
             </View>
             <Pressable
@@ -699,8 +693,8 @@ export default function PaywallScreen({
               <Feather name="edit-3" size={17} color="#2F7D5B" />
             </View>
             <View style={s.benefitRowCopy}>
-              <Text style={s.benefitRowTitle}>{redeemed ? '邀请码已兑换' : '填写邀请码'}</Text>
-              <Text style={s.sectionMeta}>{redeemed ? '每个账号只能兑换一次' : '兑换后双方各得额外奖励'}</Text>
+              <Text style={s.benefitRowTitle}>{redeemed ? t('bf_redeemed_title') : t('bf_enter_code')}</Text>
+              <Text style={s.sectionMeta}>{redeemed ? t('bf_redeemed_meta') : t('bf_redeem_meta')}</Text>
               <View style={s.inputRow}>
                 <TextInput
                   value={inviteCode}
@@ -709,7 +703,7 @@ export default function PaywallScreen({
                   autoCapitalize="characters"
                   autoCorrect={false}
                   maxLength={12}
-                  placeholder={redeemed ? '已完成兑换' : '输入邀请码'}
+                  placeholder={redeemed ? t('bf_redeemed_ph') : t('bf_code_ph')}
                   placeholderTextColor={colors.textDim}
                   returnKeyType="done"
                   style={s.input}
@@ -725,7 +719,7 @@ export default function PaywallScreen({
                   disabled={redeemed || !inputValue || benefitBusy === 'redeem'}
                 >
                   <Text style={[s.redeemText, (redeemed || !inputValue) && s.redeemTextDisabled]}>
-                    {redeemed ? '已兑' : benefitBusy === 'redeem' ? '兑换中' : '兑换'}
+                    {redeemed ? t('bf_redeemed_short') : benefitBusy === 'redeem' ? t('bf_redeeming') : t('bf_redeem')}
                   </Text>
                 </Pressable>
               </View>
@@ -735,15 +729,15 @@ export default function PaywallScreen({
         </View>
 
         <View style={s.accountSection}>
-          <Text style={s.sectionTitle}>账号与数据</Text>
-          <Text style={s.sectionMeta}>可以退出登录，或删除账号和已保存的个人数据。</Text>
+          <Text style={s.sectionTitle}>{t('ac_section')}</Text>
+          <Text style={s.sectionMeta}>{t('ac_section_meta')}</Text>
           <Pressable
             style={({ pressed }) => [s.logoutBtn, pressed && s.pressed]}
             onPress={confirmLogout}
             disabled={loading}
           >
             <Feather name="log-out" size={16} color={colors.textSecondary} />
-            <Text style={s.logoutText}>退出登录</Text>
+            <Text style={s.logoutText}>{t('ac_logout')}</Text>
           </Pressable>
           <Pressable
             style={({ pressed }) => [s.deleteAccountBtn, pressed && s.pressed]}
@@ -751,7 +745,7 @@ export default function PaywallScreen({
             disabled={loading}
           >
             <Feather name="trash-2" size={16} color="#B13A2F" />
-            <Text style={s.deleteAccountText}>删除账号</Text>
+            <Text style={s.deleteAccountText}>{t('ac_delete')}</Text>
           </Pressable>
         </View>
 

@@ -13,6 +13,7 @@ import { Feather } from '@expo/vector-icons';
 
 import { fullImageUrl } from './api';
 import { colors, radius } from './theme';
+import { t } from './strings';
 
 export function AppIcon({ name, size = 18, color = colors.textSecondary }) {
   return <Feather name={name} size={size} color={color} />;
@@ -24,7 +25,7 @@ export function Header({ apiUrl, onApiUrlChange, user, onRefresh, loading }) {
     <View style={s.header}>
       <View style={s.headerTop}>
         <View style={s.brand}>
-          <Text style={s.brandName}>放哪了</Text>
+          <Text style={s.brandName}>{t('app_name')}</Text>
           <View style={[s.statusDot, user && s.statusDotOnline]} />
         </View>
         <View style={s.headerActions}>
@@ -41,7 +42,7 @@ export function Header({ apiUrl, onApiUrlChange, user, onRefresh, loading }) {
             autoCapitalize="none"
             autoCorrect={false}
             placeholderTextColor={colors.textDim}
-            placeholder="API 地址"
+            placeholder="API URL"
           />
         </View>
       ) : null}
@@ -81,11 +82,12 @@ export function ActionButton({ label, icon, onPress, disabled, loading, variant 
   );
 }
 
-export function EmptyState({ title = '暂无内容', text, icon = 'inbox' }) {
+export function EmptyState({ title, text, icon = 'inbox' }) {
+  const displayTitle = title || t('empty_default');
   return (
     <View style={s.empty}>
       <AppIcon name={icon} color={colors.textDim} size={28} />
-      <Text style={s.emptyTitle}>{title}</Text>
+      <Text style={s.emptyTitle}>{displayTitle}</Text>
       {text ? <Text style={s.emptyText}>{text}</Text> : null}
     </View>
   );

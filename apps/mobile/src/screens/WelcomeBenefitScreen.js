@@ -14,6 +14,7 @@ import {
 import { Feather } from '@expo/vector-icons';
 
 import { colors, radius, shadows } from '../theme';
+import { apiErrorMessage, t } from '../strings';
 
 export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRedeem }) {
   const [inviteCode, setInviteCode] = useState('');
@@ -32,10 +33,10 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
     setNotice('');
     try {
       const result = await onClaim?.();
-      if (result?.granted === false) setNotice('你已经领取过新人会员');
-      else setNotice(`已领取 ${welcomeDays} 天新人会员`);
+      if (result?.granted === false) setNotice(t('bf_already_claimed'));
+      else setNotice(t('bf_claim_ok', { days: welcomeDays }));
     } catch (err) {
-      Alert.alert('领取失败', err.message);
+      Alert.alert(t('bf_claim_failed'), apiErrorMessage(err));
     } finally {
       setBusy(null);
     }
@@ -48,9 +49,9 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
     try {
       await onRedeem?.(inputValue);
       setInviteCode('');
-      setNotice('兑换成功，邀请奖励已到账');
+      setNotice(t('bf_redeem_ok'));
     } catch (err) {
-      Alert.alert('兑换失败', err.message);
+      Alert.alert(t('bf_redeem_failed'), apiErrorMessage(err));
     } finally {
       setBusy(null);
     }
@@ -58,11 +59,11 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
 
   async function handleShareCode() {
     if (!benefits?.invite_code) return;
-    const shareText = `我的放哪了邀请码：${ownCode}，填写后我们各得额外奖励`;
+    const shareText = t('bf_share_text', { code: ownCode });
     try {
       if (Platform.OS === 'web' && navigator?.clipboard?.writeText) {
         await navigator.clipboard.writeText(ownCode);
-        setNotice('邀请码已复制');
+        setNotice(t('bf_code_copied'));
         return;
       }
       await Share.share({ message: shareText });
@@ -78,7 +79,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
         <Pressable style={({ pressed }) => [s.iconBtn, pressed && s.pressed]} onPress={onBack} hitSlop={8}>
           <Feather name="chevron-left" size={22} color={colors.text} />
         </Pressable>
-        <Text style={s.navTitle}>新人福利</Text>
+        <Text style={s.navTitle}>{t('wb_nav')}</Text>
         <View style={s.navSpacer} />
       </View>
 
@@ -92,8 +93,8 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
           <View style={s.heroIcon}>
             <Feather name="gift" size={22} color={colors.white} />
           </View>
-          <Text style={s.title}>领取新人会员</Text>
-          <Text style={s.subtitle}>先拿会员体验，再填写邀请码拿额外奖励。</Text>
+          <Text style={s.title}>{t('wb_title')}</Text>
+          <Text style={s.subtitle}>{t('wb_sub')}</Text>
         </View>
 
         <View style={s.benefitCard}>
@@ -102,8 +103,8 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
               <Feather name={claimed ? 'check' : 'zap'} size={17} color={claimed ? colors.white : '#2F7D5B'} />
             </View>
             <View style={s.benefitRowCopy}>
-              <Text style={s.benefitRowTitle}>{claimed ? '新人会员已领取' : '领取新人会员'}</Text>
-              <Text style={s.sectionMeta}>{claimed ? '会员权益已到账。' : `送你 ${welcomeDays} 天新人会员`}</Text>
+              <Text style={s.benefitRowTitle}>{claimed ? t('bf_claimed_title') : t('bf_claim_title')}</Text>
+              <Text style={s.sectionMeta}>{claimed ? t('wb_claimed_meta') : t('wb_gift', { days: welcomeDays })}</Text>
             </View>
             <Pressable
               style={({ pressed }) => [
@@ -115,7 +116,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
               disabled={claimed || busy === 'claim'}
             >
               <Text style={[s.rowActionText, claimed && s.rowActionTextDone]}>
-                {claimed ? '已领取' : busy === 'claim' ? '领取中' : '领取'}
+                {claimed ? t('bf_claimed') : busy === 'claim' ? t('bf_claiming') : t('bf_claim')}
               </Text>
             </Pressable>
           </View>
@@ -127,7 +128,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
               <Feather name="copy" size={17} color="#2F7D5B" />
             </View>
             <View style={s.benefitRowCopy}>
-              <Text style={s.benefitRowTitle}>我的邀请码</Text>
+              <Text style={s.benefitRowTitle}>{t('bf_my_code')}</Text>
               <Text style={s.inviteCodeText}>{ownCode}</Text>
             </View>
             <Pressable style={({ pressed }) => [s.iconAction, pressed && s.pressed]} onPress={handleShareCode}>
@@ -142,8 +143,8 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
               <Feather name="edit-3" size={17} color="#2F7D5B" />
             </View>
             <View style={s.benefitRowCopy}>
-              <Text style={s.benefitRowTitle}>{redeemed ? '邀请码已兑换' : '填写邀请码'}</Text>
-              <Text style={s.sectionMeta}>{redeemed ? '每个账号只能兑换一次。' : '兑换后双方各得额外奖励'}</Text>
+              <Text style={s.benefitRowTitle}>{redeemed ? t('bf_redeemed_title') : t('bf_enter_code')}</Text>
+              <Text style={s.sectionMeta}>{redeemed ? t('wb_redeemed_meta') : t('bf_redeem_meta')}</Text>
               <View style={s.inputRow}>
                 <TextInput
                   value={inviteCode}
@@ -152,7 +153,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
                   autoCapitalize="characters"
                   autoCorrect={false}
                   maxLength={12}
-                  placeholder={redeemed ? '已完成兑换' : '输入邀请码'}
+                  placeholder={redeemed ? t('bf_redeemed_ph') : t('bf_code_ph')}
                   placeholderTextColor={colors.textDim}
                   returnKeyType="done"
                   style={s.input}
@@ -168,7 +169,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
                   disabled={redeemed || !inputValue || busy === 'redeem'}
                 >
                   <Text style={[s.redeemText, (redeemed || !inputValue) && s.redeemTextDisabled]}>
-                    {redeemed ? '已兑' : busy === 'redeem' ? '兑换中' : '兑换'}
+                    {redeemed ? t('bf_redeemed_short') : busy === 'redeem' ? t('bf_redeeming') : t('bf_redeem')}
                   </Text>
                 </Pressable>
               </View>
@@ -179,7 +180,7 @@ export default function WelcomeBenefitScreen({ benefits, onBack, onClaim, onRede
         {notice ? <Text style={s.notice}>{notice}</Text> : null}
 
         <Pressable style={({ pressed }) => [s.doneBtn, pressed && s.pressed]} onPress={onBack}>
-          <Text style={s.doneText}>进入放哪了</Text>
+          <Text style={s.doneText}>{t('wb_done')}</Text>
         </Pressable>
       </ScrollView>
     </KeyboardAvoidingView>

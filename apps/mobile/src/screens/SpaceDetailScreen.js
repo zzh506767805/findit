@@ -16,15 +16,16 @@ import { fullImageUrl, mediaPreviewUrl, requestJson } from '../api';
 import StableImage from '../components/StableImage';
 import { AppIcon, EmptyState } from '../ui';
 import { colors, radius } from '../theme';
+import { apiErrorMessage, t } from '../strings';
 
 function formatPositionItems(pos) {
   const count = Number(pos.item_count || 0);
   const firstItem = pos.item_names?.find(Boolean);
 
-  if (!count) return '暂无物品';
-  if (!firstItem) return `${count}件物品`;
+  if (!count) return t('sd_no_items');
+  if (!firstItem) return t('sd_items_count', { count });
   if (count === 1) return firstItem;
-  return `${firstItem}等${count}件物品`;
+  return t('sd_items_with_first', { first: firstItem, count });
 }
 
 function isVideoContent(contentType) {
@@ -176,29 +177,29 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
       load();
     } catch (err) {
       setPositions(prev => prev.filter(p => p.id !== tempId));
-      Alert.alert('创建失败', err.message);
+      Alert.alert(t('create_failed'), apiErrorMessage(err));
     }
   }
 
   function handlePosLongPress(pos) {
     if (Platform.OS === 'web') {
-      const action = window.prompt(`${pos.name}\n输入 "delete" 删除，或输入新名称重命名，取消则留空：`);
+      const action = window.prompt(t('web_prompt_action', { name: pos.name }));
       if (action === null || action === '') return;
       if (action.toLowerCase() === 'delete') { executeDeletePos(pos); return; }
       doRenamePos(pos, action);
     } else if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
-        { title: pos.name, options: ['重命名', '删除', '取消'], destructiveButtonIndex: 1, cancelButtonIndex: 2 },
+        { title: pos.name, options: [t('rename'), t('delete'), t('cancel')], destructiveButtonIndex: 1, cancelButtonIndex: 2 },
         (idx) => {
-          if (idx === 0) Alert.prompt?.('重命名位置', '', (name) => { if (name?.trim()) doRenamePos(pos, name.trim()); }, 'plain-text', pos.name);
+          if (idx === 0) Alert.prompt?.(t('sd_rename_pos'), '', (name) => { if (name?.trim()) doRenamePos(pos, name.trim()); }, 'plain-text', pos.name);
           if (idx === 1) executeDeletePos(pos);
         }
       );
     } else {
       Alert.alert(pos.name, '', [
-        { text: '重命名', onPress: () => doRenamePos(pos, '') },
-        { text: '删除', style: 'destructive', onPress: () => executeDeletePos(pos) },
-        { text: '取消', style: 'cancel' }
+        { text: t('rename'), onPress: () => doRenamePos(pos, '') },
+        { text: t('delete'), style: 'destructive', onPress: () => executeDeletePos(pos) },
+        { text: t('cancel'), style: 'cancel' }
       ]);
     }
   }
@@ -210,21 +211,21 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
       await requestJson(`/positions/${pos.id}`, { ...session, method: 'PUT', body: { name: newName } });
     } catch (err) {
       setPositions(prev => prev.map(p => p.id === pos.id ? { ...p, name: oldName } : p));
-      Alert.alert('重命名失败', err.message);
+      Alert.alert(t('rename_failed'), apiErrorMessage(err));
     }
   }
 
   function handleItemAction(item) {
     if (Platform.OS === 'web') {
-      const action = window.prompt(`${item.item_name}\n输入 "delete" 删除，或输入新名称重命名：`);
+      const action = window.prompt(t('web_prompt_action', { name: item.item_name }));
       if (!action) return;
       if (action.toLowerCase() === 'delete') { doDeleteItem(item); return; }
       doRenameItem(item, action);
     } else if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
-        { title: item.item_name, options: ['重命名', '删除', '取消'], destructiveButtonIndex: 1, cancelButtonIndex: 2 },
+        { title: item.item_name, options: [t('rename'), t('delete'), t('cancel')], destructiveButtonIndex: 1, cancelButtonIndex: 2 },
         (idx) => {
-          if (idx === 0) Alert.prompt?.('重命名物品', '', (name) => { if (name?.trim()) doRenameItem(item, name.trim()); }, 'plain-text', item.item_name);
+          if (idx === 0) Alert.prompt?.(t('sd_rename_item'), '', (name) => { if (name?.trim()) doRenameItem(item, name.trim()); }, 'plain-text', item.item_name);
           if (idx === 1) doDeleteItem(item);
         }
       );
@@ -238,7 +239,7 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
       load();
     } catch (err) {
       patchExpandedDetail(prev => ({ ...prev, items: prev.items.map(i => i.item_id === item.item_id ? { ...i, item_name: item.item_name } : i) }));
-      Alert.alert('重命名失败', err.message);
+      Alert.alert(t('rename_failed'), apiErrorMessage(err));
     }
   }
 
@@ -248,13 +249,13 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
       await requestJson(`/items/${item.item_id}`, { ...session, method: 'DELETE' });
       load();
     } catch (err) {
-      Alert.alert('删除失败', err.message);
+      Alert.alert(t('delete_failed'), apiErrorMessage(err));
       load();
     }
   }
 
   async function executeDeletePos(pos) {
-    if (Platform.OS === 'web' && !window.confirm(`确定删除"${pos.name}"？`)) return;
+    if (Platform.OS === 'web' && !window.confirm(t('web_confirm_delete', { name: pos.name }))) return;
     const prevPositions = positions;
     setPositions(prev => prev.filter(p => p.id !== pos.id));
     if (expanded === pos.id) { setExpanded(null); setLoadingDetailId(null); }
@@ -267,7 +268,7 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
       await requestJson(`/positions/${pos.id}`, { ...session, method: 'DELETE' });
     } catch (err) {
       setPositions(prevPositions);
-      Alert.alert('删除失败', err.message);
+      Alert.alert(t('delete_failed'), apiErrorMessage(err));
     }
   }
 
@@ -284,10 +285,10 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
     if (Platform.OS === 'web') {
       doPick('library');
     } else {
-      Alert.alert('记录方式', '', [
-        { text: '拍照', onPress: () => doPick('camera') },
-        { text: '从相册选', onPress: () => doPick('library') },
-        { text: '取消', style: 'cancel' }
+      Alert.alert(t('record_method'), '', [
+        { text: t('take_photo'), onPress: () => doPick('camera') },
+        { text: t('from_library'), onPress: () => doPick('library') },
+        { text: t('cancel'), style: 'cancel' }
       ]);
     }
   }
@@ -296,7 +297,7 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
     const perm = source === 'camera'
       ? await ImagePicker.requestCameraPermissionsAsync()
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) { Alert.alert('需要权限'); return; }
+    if (!perm.granted) { Alert.alert(t('need_permission')); return; }
 
     const options = {
       mediaTypes: ['images', 'videos'],
@@ -322,7 +323,7 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
         </Pressable>
         <View style={s.topBody}>
           <Text style={s.topTitle}>{space.name}</Text>
-          <Text style={s.topMeta}>{positions.length} 个位置 · {total} 件物品</Text>
+          <Text style={s.topMeta}>{t('sd_meta', { positions: positions.length, items: total })}</Text>
         </View>
       </View>
 
@@ -407,13 +408,13 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
             ) : null}
           </View>
         )) : !addingPos ? (
-          <EmptyState title="还没有位置" text="添加位置或拍照让 AI 自动识别" icon="map-pin" />
+          <EmptyState title={t('sd_empty_title')} text={t('sd_empty_text')} icon="map-pin" />
         ) : null}
 
         {addingPos ? (
           <View style={s.addRow}>
             <TextInput style={s.addInput} value={newPosName} onChangeText={setNewPosName}
-              placeholder="位置名称，如 书桌、衣柜第二层" placeholderTextColor={colors.textDim}
+              placeholder={t('sd_add_pos_ph')} placeholderTextColor={colors.textDim}
               autoFocus returnKeyType="done" onSubmitEditing={handleAddPos} />
             <Pressable style={s.addConfirm} onPress={handleAddPos}>
               <AppIcon name="check" size={16} color={colors.white} />
@@ -426,7 +427,7 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
           <Pressable style={({ pressed }) => [s.addPosBtn, pressed && s.pressed]}
             onPress={() => setAddingPos(true)}>
             <AppIcon name="plus" size={14} color={colors.textSecondary} />
-            <Text style={s.addPosBtnText}>添加位置</Text>
+            <Text style={s.addPosBtnText}>{t('sd_add_pos')}</Text>
           </Pressable>
         )}
       </ScrollView>
@@ -435,7 +436,7 @@ export default function SpaceDetailScreen({ session, space, dataVersion, onBack,
         <Pressable style={({ pressed }) => [s.photoBtn, pressed && s.pressed]}
           onPress={pickPhoto}>
           <AppIcon name="camera" size={17} color={colors.bg} />
-          <Text style={s.photoBtnText}>拍这个房间</Text>
+          <Text style={s.photoBtnText}>{t('sd_shoot_room')}</Text>
         </Pressable>
       </View>
     </View>

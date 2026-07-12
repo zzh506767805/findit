@@ -3,6 +3,7 @@ import { Image, Modal, Platform, Pressable, StyleSheet, Text, View, useWindowDim
 import * as SecureStore from 'expo-secure-store';
 
 import { colors, radius, shadows } from '../theme';
+import { t } from '../strings';
 
 const guideImage = require('../../assets/onboarding-guide.jpg');
 const STORAGE_KEY = 'findit_guide_done';
@@ -32,15 +33,13 @@ export default function OnboardingGuide({ onCapture, onDismiss }) {
         <View style={[s.card, { width: cardW }]}>
           <Image source={guideImage} style={[s.hero, { height: cardW * 0.66 }]} resizeMode="cover" />
           <View style={s.content}>
-            <Text style={s.title}>随手拍一张，开启收纳</Text>
-            <Text style={s.text}>
-              打开一个抽屉或柜子，拍张照。AI 会认出里面的物品并记住位置，以后找东西，问一句就行。
-            </Text>
+            <Text style={s.title}>{t('og_title')}</Text>
+            <Text style={s.text}>{t('og_text')}</Text>
             <Pressable style={({ pressed }) => [s.captureBtn, pressed && s.pressed]} onPress={onCapture}>
-              <Text style={s.captureBtnText}>拍一张试试</Text>
+              <Text style={s.captureBtnText}>{t('og_try')}</Text>
             </Pressable>
             <Pressable style={({ pressed }) => [s.laterBtn, pressed && s.pressed]} onPress={onDismiss}>
-              <Text style={s.laterText}>稍后再说</Text>
+              <Text style={s.laterText}>{t('og_later')}</Text>
             </Pressable>
           </View>
         </View>

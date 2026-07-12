@@ -20,6 +20,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { requestJson } from '../api';
 import { AppIcon } from '../ui';
 import { colors, radius, shadows } from '../theme';
+import { apiErrorMessage, t } from '../strings';
 import SpaceDetailScreen from './SpaceDetailScreen';
 import OnboardingGuide, { isGuideDone, markGuideDone } from '../components/OnboardingGuide';
 import { getSpaceCoverSource } from '../spaceCovers';
@@ -121,23 +122,23 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       onDataChanged?.();
     } catch (err) {
       setData(prev => ({ ...prev, spaces: prev.spaces.filter(s => s.id !== tempId), total_spaces: prev.total_spaces - 1 }));
-      Alert.alert('创建失败', err.message);
+      Alert.alert(t('create_failed'), apiErrorMessage(err));
     }
   }
 
   function handleSpaceLongPress(space) {
     if (Platform.OS === 'web') {
-      const action = window.prompt(`${space.name}\n输入 "delete" 删除，或输入新名称重命名，取消则留空：`);
+      const action = window.prompt(t('web_prompt_action', { name: space.name }));
       if (action === null || action === '') return;
       if (action.toLowerCase() === 'delete') { doDeleteSpace(space); return; }
       doRenameSpace(space, action);
     } else {
       Alert.alert(space.name, '', [
-        { text: '重命名', onPress: () => {
-          Alert.prompt?.('重命名空间', '', (name) => { if (name?.trim()) doRenameSpace(space, name.trim()); }, 'plain-text', space.name);
+        { text: t('rename'), onPress: () => {
+          Alert.prompt?.(t('sp_rename_space'), '', (name) => { if (name?.trim()) doRenameSpace(space, name.trim()); }, 'plain-text', space.name);
         }},
-        { text: '删除', style: 'destructive', onPress: () => doDeleteSpace(space) },
-        { text: '取消', style: 'cancel' }
+        { text: t('delete'), style: 'destructive', onPress: () => doDeleteSpace(space) },
+        { text: t('cancel'), style: 'cancel' }
       ]);
     }
   }
@@ -150,18 +151,18 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       onDataChanged?.();
     } catch (err) {
       setData(prev => ({ ...prev, spaces: prev.spaces.map(s => s.id === space.id ? { ...s, name: oldName } : s) }));
-      Alert.alert('重命名失败', err.message);
+      Alert.alert(t('rename_failed'), apiErrorMessage(err));
     }
   }
 
   async function doDeleteSpace(space) {
-    if (Platform.OS === 'web' ? !window.confirm(`确定删除"${space.name}"？`) : false) return;
+    if (Platform.OS === 'web' ? !window.confirm(t('web_confirm_delete', { name: space.name })) : false) return;
     if (Platform.OS !== 'web') {
       // Native uses Alert.alert for confirmation
       return new Promise(resolve => {
-        Alert.alert('删除空间', `确定删除"${space.name}"及其所有位置和物品？`, [
-          { text: '取消', style: 'cancel', onPress: resolve },
-          { text: '删除', style: 'destructive', onPress: () => { executeDeleteSpace(space); resolve(); }}
+        Alert.alert(t('sp_delete_space'), t('sp_delete_space_msg', { name: space.name }), [
+          { text: t('cancel'), style: 'cancel', onPress: resolve },
+          { text: t('delete'), style: 'destructive', onPress: () => { executeDeleteSpace(space); resolve(); }}
         ]);
       });
     }
@@ -181,7 +182,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       onDataChanged?.();
     } catch (err) {
       setData(prevData);
-      Alert.alert('删除失败', err.message);
+      Alert.alert(t('delete_failed'), apiErrorMessage(err));
     }
   }
 
@@ -189,10 +190,10 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
     if (Platform.OS === 'web') {
       doPick('library', spaceHint);
     } else {
-      Alert.alert('记录方式', '', [
-        { text: '拍照', onPress: () => doPick('camera', spaceHint) },
-        { text: '从相册选', onPress: () => doPick('library', spaceHint) },
-        { text: '取消', style: 'cancel' }
+      Alert.alert(t('record_method'), '', [
+        { text: t('take_photo'), onPress: () => doPick('camera', spaceHint) },
+        { text: t('from_library'), onPress: () => doPick('library', spaceHint) },
+        { text: t('cancel'), style: 'cancel' }
       ]);
     }
   }
@@ -201,7 +202,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
     const perm = source === 'camera'
       ? await ImagePicker.requestCameraPermissionsAsync()
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) { Alert.alert('需要权限'); return; }
+    if (!perm.granted) { Alert.alert(t('need_permission')); return; }
 
     const options = {
       mediaTypes: ['images', 'videos'],
@@ -241,21 +242,21 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
         <HeroFloorPlan />
         <View style={s.header}>
           <View style={s.headerText}>
-            <Text style={s.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.86}>拍照记录，想找就问</Text>
+            <Text style={s.title} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.86}>{t('sp_title')}</Text>
             <View style={s.topStats}>
               <View style={s.topStat}>
                 <Text style={s.topStatValue}>{data.total_spaces}</Text>
-                <Text style={s.topStatLabel}>空间</Text>
+                <Text style={s.topStatLabel}>{t('sp_stat_spaces')}</Text>
               </View>
               <View style={s.topStatDivider} />
               <View style={s.topStat}>
                 <Text style={s.topStatValue}>{totalPositions}</Text>
-                <Text style={s.topStatLabel}>位置</Text>
+                <Text style={s.topStatLabel}>{t('sp_stat_positions')}</Text>
               </View>
               <View style={s.topStatDivider} />
               <View style={s.topStat}>
                 <Text style={s.topStatValue}>{data.total_items}</Text>
-                <Text style={s.topStatLabel}>物品</Text>
+                <Text style={s.topStatLabel}>{t('sp_stat_items')}</Text>
               </View>
             </View>
           </View>
@@ -269,7 +270,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
             </View>
           </View>
           <View style={s.captureLabelWrap}>
-            <Text style={s.captureBtnText}>记录物品</Text>
+            <Text style={s.captureBtnText}>{t('sp_capture')}</Text>
           </View>
         </Pressable>
       </View>
@@ -277,7 +278,7 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       {addingSpace ? (
         <View style={s.addRow}>
           <TextInput style={s.addInput} value={newSpaceName} onChangeText={setNewSpaceName}
-            placeholder="空间名称，如 客厅、卧室" placeholderTextColor={colors.textDim}
+            placeholder={t('sp_add_space_ph')} placeholderTextColor={colors.textDim}
             autoFocus returnKeyType="done" onSubmitEditing={handleAddSpace} />
           <Pressable style={s.addConfirm} onPress={handleAddSpace}>
             <AppIcon name="check" size={16} color={colors.white} />
@@ -289,9 +290,9 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
       ) : null}
 
       <View style={s.sectionHead}>
-        <Text style={s.sectionTitle}>{hasSpaces ? '我的空间' : '开始记录'}</Text>
+        <Text style={s.sectionTitle}>{hasSpaces ? t('sp_my_spaces') : t('sp_start')}</Text>
         <View style={s.sectionActions}>
-          {hasSpaces ? <Text style={s.sectionMeta}>{spaces.length} 个</Text> : null}
+          {hasSpaces ? <Text style={s.sectionMeta}>{t('sp_count_suffix', { count: spaces.length })}</Text> : null}
           {hasSpaces && !addingSpace ? (
             <Pressable style={({ pressed }) => [s.sectionAddBtn, pressed && s.pressed]} onPress={() => setAddingSpace(true)}>
               <AppIcon name="plus" size={16} color={colors.text} />
@@ -311,14 +312,14 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
                 <View style={s.spaceTop}>
                   <View style={s.spaceNameWrap}>
                     <Text style={s.spaceName} numberOfLines={1}>{space.name}</Text>
-                    <Text style={s.spaceCount}>{Number(space.item_count || 0)} 件物品</Text>
+                    <Text style={s.spaceCount}>{t('sp_item_count', { count: Number(space.item_count || 0) })}</Text>
                   </View>
                   <Pressable style={s.spaceMore} hitSlop={8} onPress={(e) => { e.stopPropagation?.(); handleSpaceLongPress(space); }}>
                     <AppIcon name="more-horizontal" size={17} color={colors.textDim} />
                   </Pressable>
                 </View>
                 <Text style={s.spacePositions} numberOfLines={1}>
-                  {space.positions?.join('  ·  ') || '暂无位置'}
+                  {space.positions?.join('  ·  ') || t('sp_no_positions')}
                 </Text>
               </View>
             </Pressable>
@@ -328,20 +329,20 @@ export default function SpacesScreen({ session, onDataChanged, dataVersion, onPi
         <View style={s.firstRecordCard}>
           <Image source={emptyHomeImage} style={s.firstRecordImage} resizeMode="cover" />
           <View style={s.firstRecordBody}>
-            <Text style={s.firstRecordTitle}>拍一张，自动帮你整理</Text>
-            <Text style={s.firstRecordText}>AI 认出照片里的物品，空间和位置自动建好</Text>
+            <Text style={s.firstRecordTitle}>{t('sp_first_title')}</Text>
+            <Text style={s.firstRecordText}>{t('sp_first_text')}</Text>
             <Pressable
               style={({ pressed }) => [s.firstRecordButton, pressed && s.pressed]}
               onPress={() => pickAndSend()}
             >
               <AppIcon name="camera" size={18} color={colors.white} />
-              <Text style={s.firstRecordButtonText}>拍照记录</Text>
+              <Text style={s.firstRecordButtonText}>{t('sp_first_btn')}</Text>
             </Pressable>
             <Pressable
               style={({ pressed }) => [s.manualSpaceButton, pressed && s.pressed]}
               onPress={() => setAddingSpace(true)}
             >
-              <Text style={s.manualSpaceText}>手动添加空间</Text>
+              <Text style={s.manualSpaceText}>{t('sp_manual_add')}</Text>
             </Pressable>
           </View>
         </View>

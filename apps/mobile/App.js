@@ -20,6 +20,7 @@ import { initialWindowMetrics, SafeAreaProvider } from 'react-native-safe-area-c
 
 import { getDefaultApiUrl, requestJson } from './src/api';
 import { colors, radius } from './src/theme';
+import { isZh, t } from './src/strings';
 
 const isWeb = Platform.OS === 'web';
 
@@ -46,11 +47,11 @@ import LoginScreen from './src/screens/LoginScreen';
 import PaywallScreen from './src/screens/PaywallScreen';
 import WelcomeBenefitScreen from './src/screens/WelcomeBenefitScreen';
 
-const APP_NAME = '放哪了';
+const APP_NAME = t('app_name');
 
 const tabs = [
-  { id: 'spaces', label: '我的家', icon: 'home', width: 82 },
-  { id: 'assistant', label: '助手', icon: 'message-circle', width: 70 }
+  { id: 'spaces', label: t('tab_spaces'), icon: 'home', width: isZh ? 82 : 84 },
+  { id: 'assistant', label: t('tab_assistant'), icon: 'message-circle', width: isZh ? 70 : 106 }
 ];
 
 const TOP_BAR_PADDING_TOP = 4;
@@ -80,7 +81,7 @@ function AccountButton({ credits, benefits, onPress }) {
 
   return (
     <Pressable
-      accessibilityLabel="账户和购买"
+      accessibilityLabel={t('a11y_account')}
       hitSlop={8}
       style={({ pressed }) => [s.accountBtn, pressed && s.pressed]}
       onPress={onPress}

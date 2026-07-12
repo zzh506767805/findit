@@ -5,12 +5,19 @@ function createSseHandler(xhr, onEvent, resolve, reject) {
   let dataLines = [];
   let settled = false;
 
-  function responseErrorMessage() {
+  function responseError() {
     try {
       const data = JSON.parse(xhr.responseText || '{}');
-      if (data.error) return data.error;
+      if (data.error) {
+        const error = new Error(data.error);
+        if (data.code) error.code = data.code;
+        error.status = xhr.status;
+        return error;
+      }
     } catch {}
-    return xhr.responseText || `Request failed: ${xhr.status}`;
+    const error = new Error(xhr.responseText || `Request failed: ${xhr.status}`);
+    error.status = xhr.status;
+    return error;
   }
 
   function settleSuccess() {
@@ -75,7 +82,7 @@ function createSseHandler(xhr, onEvent, resolve, reject) {
       if (xhr.status >= 200 && xhr.status < 300) {
         settleSuccess();
       } else {
-        settleError(new Error(responseErrorMessage()));
+        settleError(responseError());
       }
     }
   };

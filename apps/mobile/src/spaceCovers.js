@@ -72,7 +72,7 @@ const coverRules = [
     key: 'living',
     words: [
       '客厅', '起居', '起居室', '会客', '会客厅', '大厅', '厅', '沙发', '电视', '电视柜',
-      '茶几', '休闲区', '家庭区', 'living', 'lounge', 'sitting', 'familyroom', 'tvroom'
+      '茶几', '休闲区', '家庭区', 'living', 'lounge', 'sitting', 'familyroom', 'tvroom', 'den'
     ]
   },
   {
@@ -108,7 +108,7 @@ const coverRules = [
     key: 'bathroom',
     words: [
       '卫生间', '洗手间', '厕所', '浴室', '洗漱', '洗漱台', '浴柜', '马桶', '淋浴',
-      '澡', '浴缸', 'bathroom', 'bath', 'toilet', 'washroom', 'shower', 'lavatory'
+      '澡', '浴缸', 'bathroom', 'bath', 'toilet', 'washroom', 'shower', 'lavatory', 'restroom', 'powder'
     ]
   },
   {
@@ -123,7 +123,7 @@ const coverRules = [
     key: 'balcony',
     words: [
       '阳台', '露台', '晾晒', '晾衣', '洗衣', '洗衣机', '花架', '花园', '庭院',
-      'balcony', 'terrace', 'patio', 'garden', 'laundry'
+      'balcony', 'terrace', 'patio', 'garden', 'laundry', 'porch', 'deck', 'yard'
     ]
   },
   {
@@ -131,7 +131,7 @@ const coverRules = [
     words: [
       '储物', '储藏', '杂物', '衣帽', '衣帽间', '衣柜', '柜子', '柜', '抽屉', '收纳',
       '置物', '货架', '架子', '库房', '仓库', '杂物间', '工具间', 'closet', 'wardrobe',
-      'storage', 'shelf', 'shelves', 'drawer', 'cabinet', 'utility'
+      'storage', 'shelf', 'shelves', 'drawer', 'cabinet', 'utility', 'garage', 'basement', 'attic'
     ]
   }
 ];

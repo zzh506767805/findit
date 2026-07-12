@@ -25,6 +25,7 @@ import StableImage from '../components/StableImage';
 import { AppIcon } from '../ui';
 import { colors, radius, shadows } from '../theme';
 import AgentWorkflow from '../components/AgentWorkflow';
+import { apiErrorMessage, t } from '../strings';
 import SuggestionCard from '../components/SuggestionCard';
 
 function TypingDots() {
@@ -49,7 +50,7 @@ function TypingDots() {
 
   return (
     <View style={s.typingRow}>
-      <Text style={s.typingLabel}>思考中</Text>
+      <Text style={s.typingLabel}>{t('typing')}</Text>
       {[dot1, dot2, dot3].map((d, i) => (
         <Animated.View key={i} style={[s.typingDot, { opacity: d }]} />
       ))}
@@ -287,14 +288,14 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     const hadDraft = draftMedia.length > 0;
     const available = Math.max(0, DRAFT_MEDIA_LIMIT - draftMedia.length);
     if (available <= 0) {
-      Alert.alert('最多可添加 12 个媒体');
+      Alert.alert(t('max_media', { count: DRAFT_MEDIA_LIMIT }));
       return;
     }
     const selected = assets.slice(0, available).map((asset, index) => ({
       ...asset,
       draftId: `${Date.now()}_${index}_${Math.random().toString(36).slice(2)}`
     }));
-    if (assets.length > available) Alert.alert('已添加前 12 个媒体');
+    if (assets.length > available) Alert.alert(t('max_media_added', { count: DRAFT_MEDIA_LIMIT }));
     if (!hadDraft) {
       setDraftOrigin(origin);
       setDraftSpaceHint(spaceHint || '');
@@ -445,10 +446,10 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
       );
       onCreditsChanged?.();
     } catch (err) {
-      if (err.message?.includes('已用完')) {
+      if (err.code === 'INSUFFICIENT_CREDITS' || err.message?.includes('已用完')) {
         onNeedCredits?.();
       } else {
-        patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
+        patchLastAgent((m) => ({ ...m, answer: t('error_prefix', { message: apiErrorMessage(err) }) }));
       }
     } finally {
       patchLastAgent((m) => ({ ...m, streaming: false }));
@@ -511,7 +512,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
     const perm = source === 'camera'
       ? await ImagePicker.requestCameraPermissionsAsync()
       : await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) { Alert.alert('需要权限'); return; }
+    if (!perm.granted) { Alert.alert(t('need_permission')); return; }
 
     const options = mediaType === 'video'
       ? { mediaTypes: ['videos'], videoMaxDuration: 10, quality: 1 }
@@ -557,7 +558,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         else if (e.type === 'error') throw new Error(e.error || 'Agent failed');
       });
     } catch (err) {
-      patchLastAgent((m) => ({ ...m, answer: `出错了: ${err.message}` }));
+      patchLastAgent((m) => ({ ...m, answer: t('error_prefix', { message: apiErrorMessage(err) }) }));
     } finally {
       patchLastAgent((m) => ({ ...m, streaming: false }));
       if (didMutateData) onDataChanged?.();
@@ -600,7 +601,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         const c = [...prev]; c[idx] = { ...c[idx], confirmed: true }; return c;
       });
       onDataChanged?.();
-    } catch (err) { Alert.alert('保存失败', err.message); }
+    } catch (err) { Alert.alert(t('save_failed'), apiErrorMessage(err)); }
     finally { setBusy(false); }
   }
 
@@ -620,7 +621,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         copyTimerRef.current = null;
       }, 1300);
     } catch {
-      Alert.alert('复制失败', '请稍后再试');
+      Alert.alert(t('copy_failed'), t('try_later'));
     }
   }
 
@@ -642,10 +643,10 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
 
         {messages.length === 0 && !loadingHistory ? (
           <View style={s.hero}>
-            <Text style={s.heroTitle}>找东西，问我就行</Text>
-            <Text style={s.heroSub}>拍张照片记录，或直接问位置</Text>
+            <Text style={s.heroTitle}>{t('hero_title')}</Text>
+            <Text style={s.heroSub}>{t('hero_sub')}</Text>
             <View style={s.hints}>
-              {['护照在哪', '充电线放哪了', '剪刀呢'].map((h) => (
+              {[t('hint_1'), t('hint_2'), t('hint_3')].map((h) => (
                 <Pressable key={h} style={s.hint} onPress={() => setInput(h)}>
                   <Text style={s.hintText}>{h}</Text>
                 </Pressable>
@@ -657,7 +658,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
         {messages.length > 0 ? (
           <Pressable style={s.newConvBtn} onPress={startNewConversation} disabled={busy}>
             <AppIcon name="plus" size={14} color={colors.textDim} />
-            <Text style={s.newConvText}>新对话</Text>
+            <Text style={s.newConvText}>{t('new_conv')}</Text>
           </Pressable>
         ) : null}
 
@@ -696,7 +697,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                     {copiedAgentKey === copyKey ? (
                       <View style={s.copyHint}>
                         <AppIcon name="check" size={12} color={colors.green} />
-                        <Text style={s.copyHintText}>已复制</Text>
+                        <Text style={s.copyHintText}>{t('copied')}</Text>
                       </View>
                     ) : null}
                   </Pressable>
@@ -722,7 +723,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                 {msg.confirmed ? (
                   <View style={s.confirmed}>
                     <AppIcon name="check" size={14} color={colors.green} />
-                    <Text style={s.confirmedText}>已保存</Text>
+                    <Text style={s.confirmedText}>{t('saved')}</Text>
                   </View>
                 ) : null}
               </View>
@@ -744,13 +745,13 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                   <Pressable style={({ pressed }) => [s.draftAddTile, pressed && s.pressed]}
                     onPress={() => pickMedia('camera', 'image')} disabled={busy}>
                     <AppIcon name="camera" size={16} color={colors.textSecondary} />
-                    <Text style={s.draftAddText}>继续拍</Text>
+                    <Text style={s.draftAddText}>{t('draft_more_shoot')}</Text>
                   </Pressable>
                 ) : null}
                 <Pressable style={({ pressed }) => [s.draftAddTile, pressed && s.pressed]}
                   onPress={() => pickMedia('library')} disabled={busy}>
                   <AppIcon name="image" size={16} color={colors.textSecondary} />
-                  <Text style={s.draftAddText}>相册</Text>
+                  <Text style={s.draftAddText}>{t('draft_album')}</Text>
                 </Pressable>
               </ScrollView>
             </View>
@@ -761,11 +762,11 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
                 if (Platform.OS === 'web') {
                   pickMedia('library');
                 } else {
-                  Alert.alert('记录方式', '', [
-                    { text: '拍照', onPress: () => pickMedia('camera', 'image') },
-                    { text: '录像', onPress: () => pickMedia('camera', 'video') },
-                    { text: '从相册选', onPress: () => pickMedia('library') },
-                    { text: '取消', style: 'cancel' }
+                  Alert.alert(t('record_method'), '', [
+                    { text: t('take_photo'), onPress: () => pickMedia('camera', 'image') },
+                    { text: t('record_video'), onPress: () => pickMedia('camera', 'video') },
+                    { text: t('from_library'), onPress: () => pickMedia('library') },
+                    { text: t('cancel'), style: 'cancel' }
                   ]);
                 }
               }} disabled={busy}>
@@ -773,7 +774,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
             </Pressable>
             <View style={s.inputWrap}>
               <TextInput style={s.input} value={input} onChangeText={setInput}
-                placeholder={draftMedia.length ? '添加说明...' : '帮我找...'} placeholderTextColor={colors.textDim}
+                placeholder={draftMedia.length ? t('input_placeholder_media') : t('input_placeholder')} placeholderTextColor={colors.textDim}
                 returnKeyType="send" onSubmitEditing={sendComposer} editable={!busy} />
             </View>
             {draftMedia.length > 0 ? (

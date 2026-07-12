@@ -2,18 +2,19 @@ import React, { useState } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { AppIcon, ActionButton } from '../ui';
 import { colors, radius } from '../theme';
+import { t } from '../strings';
 
 const STATUS = {
-  new: { label: '新', color: colors.orange, bg: colors.orangeSoft },
-  existing: { label: '有', color: colors.green, bg: colors.greenSoft },
-  missing: { label: '?', color: colors.red, bg: colors.redSoft }
+  new: { labelKey: 'sc_status_new', color: colors.orange, bg: colors.orangeSoft },
+  existing: { labelKey: 'sc_status_existing', color: colors.green, bg: colors.greenSoft },
+  missing: { labelKey: 'sc_status_missing', color: colors.red, bg: colors.redSoft }
 };
 
 function Badge({ status }) {
   const c = STATUS[status] || STATUS.new;
   return (
     <View style={[s.badge, { backgroundColor: c.bg }]}>
-      <Text style={[s.badgeText, { color: c.color }]}>{c.label}</Text>
+      <Text style={[s.badgeText, { color: c.color }]}>{t(c.labelKey)}</Text>
     </View>
   );
 }
@@ -34,7 +35,7 @@ function ItemRowEdit({ item, onChange, onDelete }) {
       <Badge status={item.status} />
       <TextInput style={s.itemInput} value={item.name}
         onChangeText={(name) => onChange({ ...item, name })}
-        placeholder="物品名称" placeholderTextColor={colors.textDim} />
+        placeholder={t('sc_item_name_ph')} placeholderTextColor={colors.textDim} />
       <Pressable onPress={onDelete} hitSlop={8} style={s.deleteBtn}>
         <AppIcon name="x" size={14} color={colors.red} />
       </Pressable>
@@ -91,16 +92,16 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
           <View style={s.headerEdit}>
             <TextInput style={s.locationInput} value={space?.name}
               onChangeText={(v) => updateDraft((d) => { d.space.name = v; })}
-              placeholder="空间" placeholderTextColor={colors.textDim} />
+              placeholder={t('sc_space_ph')} placeholderTextColor={colors.textDim} />
             <Text style={s.locationSlash}>/</Text>
             <TextInput style={s.locationInput} value={position?.name}
               onChangeText={(v) => updateDraft((d) => { d.position.name = v; })}
-              placeholder="位置" placeholderTextColor={colors.textDim} />
+              placeholder={t('sc_position_ph')} placeholderTextColor={colors.textDim} />
           </View>
         ) : (
           <>
             <Text style={s.location} numberOfLines={1}>{space?.name} / {position?.name}</Text>
-            {(space?.is_new || position?.is_new) ? <Text style={s.newLabel}>新位置</Text> : null}
+            {(space?.is_new || position?.is_new) ? <Text style={s.newLabel}>{t('sc_new_location')}</Text> : null}
           </>
         )}
       </View>
@@ -117,24 +118,24 @@ export default function SuggestionCard({ suggestion, onConfirm, onEdit, loading 
           {editing ? (
             <Pressable style={s.addBtn} onPress={addItem}>
               <AppIcon name="plus" size={14} color={colors.textSecondary} />
-              <Text style={s.addBtnText}>添加物品</Text>
+              <Text style={s.addBtnText}>{t('sc_add_item')}</Text>
             </Pressable>
           ) : null}
         </View>
       ) : null}
 
       <View style={s.footer}>
-        <Text style={s.footerCount}>{total} 件</Text>
+        <Text style={s.footerCount}>{t('sc_count', { count: total })}</Text>
         <View style={s.footerActions}>
           {editing ? (
             <>
-              <ActionButton label="取消" icon="x" variant="secondary" compact onPress={cancelEdit} />
-              <ActionButton label="保存" icon="check" compact onPress={confirmEdit} loading={loading} />
+              <ActionButton label={t('cancel')} icon="x" variant="secondary" compact onPress={cancelEdit} />
+              <ActionButton label={t('save')} icon="check" compact onPress={confirmEdit} loading={loading} />
             </>
           ) : (
             <>
-              <ActionButton label="修改" icon="edit-2" variant="secondary" compact onPress={startEdit} />
-              <ActionButton label="保存" icon="check" compact onPress={() => onConfirm?.(suggestion)} loading={loading} />
+              <ActionButton label={t('edit')} icon="edit-2" variant="secondary" compact onPress={startEdit} />
+              <ActionButton label={t('save')} icon="check" compact onPress={() => onConfirm?.(suggestion)} loading={loading} />
             </>
           )}
         </View>

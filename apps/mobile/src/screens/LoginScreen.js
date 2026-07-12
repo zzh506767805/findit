@@ -5,6 +5,7 @@ import { Feather } from '@expo/vector-icons';
 
 import { requestJson } from '../api';
 import { colors, radius } from '../theme';
+import { apiErrorMessage, t } from '../strings';
 
 export default function LoginScreen({ apiUrl, onLogin }) {
   const [loading, setLoading] = useState(false);
@@ -36,7 +37,7 @@ export default function LoginScreen({ apiUrl, onLogin }) {
       onLogin(data);
     } catch (err) {
       if (err.code !== 'ERR_REQUEST_CANCELED') {
-        Alert.alert('登录失败', err.message);
+        Alert.alert(t('login_failed'), apiErrorMessage(err));
       }
     } finally {
       setLoading(false);
@@ -53,7 +54,7 @@ export default function LoginScreen({ apiUrl, onLogin }) {
       });
       onLogin(data);
     } catch (err) {
-      Alert.alert('登录失败', err.message);
+      Alert.alert(t('login_failed'), apiErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -62,8 +63,8 @@ export default function LoginScreen({ apiUrl, onLogin }) {
   return (
     <View style={s.container}>
       <View style={s.hero}>
-        <Text style={s.logo}>放哪了</Text>
-        <Text style={s.subtitle}>AI 收纳师 · 拍照记录，随时找到</Text>
+        <Text style={s.logo}>{t('app_name')}</Text>
+        <Text style={s.subtitle}>{t('login_subtitle')}</Text>
       </View>
 
       <View style={s.actions}>
@@ -80,12 +81,12 @@ export default function LoginScreen({ apiUrl, onLogin }) {
         {__DEV__ ? (
           <Pressable style={s.demoBtn} onPress={signInDemo} disabled={loading}>
             <Feather name="user" size={16} color={colors.textSecondary} />
-            <Text style={s.demoBtnText}>开发模式登录</Text>
+            <Text style={s.demoBtnText}>{t('login_dev')}</Text>
           </Pressable>
         ) : null}
       </View>
 
-      <Text style={s.terms}>登录即表示同意用户协议和隐私政策</Text>
+      <Text style={s.terms}>{t('login_terms')}</Text>
     </View>
   );
 }

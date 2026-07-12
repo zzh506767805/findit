@@ -272,3 +272,4 @@ npx eas-cli build --profile preview --platform ios
 - JWT_SECRET 生产环境必须设置（否则 process.exit），开发环境用 fallback
 - save_items 工具：所有参数可选，通用于拍照识别和手动创建空间/位置/物品
 - Azure OpenAI 请求自动重试 2 次（间隔 1s/2s），防 ECONNRESET
+- 多语言（2026-07-12）：语言判定跟随设备系统语言，不跟 App Store 分区。后端 parseLanguage(Accept-Language) → runAgent(userLanguage) 注入 prompt；纯照片无文字时必须在请求文本里显式点名设备语言（中文包装文字会被模型当成用户语言）；search_items 未命中自动翻译成库内语言重搜。4xx 响应带 code 字段（约 20 个错误码），error 中文文案保留兼容老版本。前端 apps/mobile/src/strings.js：zh/en 扁平字典 + t(key, params)，expo-localization 取语言，非 zh 一律走 en；错误展示 apiErrorMessage()——中文用户优先显示后端 error 原文，英文用户优先按 code 查字典。pg 连接池加了 error 处理器防空闲连接超时崩进程

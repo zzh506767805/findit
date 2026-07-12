@@ -39,7 +39,8 @@
     "owner": "zetacoler",
     "plugins": [
       "expo-secure-store",
-      "expo-asset"
+      "expo-asset",
+      "expo-localization"
     ]
   }
 }

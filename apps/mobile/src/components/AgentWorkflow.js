@@ -5,20 +5,21 @@ import { fullImageUrl, mediaPreviewUrl } from '../api';
 import StableImage from './StableImage';
 import { AppIcon } from '../ui';
 import { colors, radius } from '../theme';
+import { t } from '../strings';
 
 const TOOL_LABELS = {
-  list_spaces: { icon: 'globe', label: '查看空间' },
-  list_positions: { icon: 'map-pin', label: '查看位置' },
-  get_position_items: { icon: 'list', label: '查看物品' },
-  view_photo: { icon: 'image', label: '查看照片' },
-  view_position_photo: { icon: 'image', label: '查看位置照片' },
-  search_items: { icon: 'search', label: '搜索物品' },
-  save_items: { icon: 'save', label: '整理数据' },
-  suggest_save: { icon: 'save', label: '整理数据' },
-  update_item: { icon: 'edit-2', label: '修改物品' },
-  update_position: { icon: 'edit-3', label: '修正位置' },
-  delete_item: { icon: 'trash-2', label: '删除物品' },
-  submit_feedback: { icon: 'message-square', label: '记录反馈' }
+  list_spaces: { icon: 'globe', labelKey: 'tool_list_spaces' },
+  list_positions: { icon: 'map-pin', labelKey: 'tool_list_positions' },
+  get_position_items: { icon: 'list', labelKey: 'tool_get_position_items' },
+  view_photo: { icon: 'image', labelKey: 'tool_view_photo' },
+  view_position_photo: { icon: 'image', labelKey: 'tool_view_position_photo' },
+  search_items: { icon: 'search', labelKey: 'tool_search_items' },
+  save_items: { icon: 'save', labelKey: 'tool_save_items' },
+  suggest_save: { icon: 'save', labelKey: 'tool_save_items' },
+  update_item: { icon: 'edit-2', labelKey: 'tool_update_item' },
+  update_position: { icon: 'edit-3', labelKey: 'tool_update_position' },
+  delete_item: { icon: 'trash-2', labelKey: 'tool_delete_item' },
+  submit_feedback: { icon: 'message-square', labelKey: 'tool_submit_feedback' }
 };
 
 function formatToolArgs(args) {
@@ -32,31 +33,32 @@ function formatToolArgs(args) {
 }
 
 function formatToolLabel(tool, args) {
-  const entry = TOOL_LABELS[tool] || { icon: 'cpu', label: tool };
-  if (tool === 'list_positions' && args?.space_name) return { ...entry, label: `查看${args.space_name}的位置` };
-  if (tool === 'search_items' && args?.query) return { ...entry, label: `搜索"${args.query}"` };
-  return entry;
+  const entry = TOOL_LABELS[tool] || { icon: 'cpu' };
+  const label = entry.labelKey ? t(entry.labelKey) : tool;
+  if (tool === 'list_positions' && args?.space_name) return { ...entry, label: t('wf_list_positions_of', { name: args.space_name }) };
+  if (tool === 'search_items' && args?.query) return { ...entry, label: t('wf_search_for', { query: args.query }) };
+  return { ...entry, label };
 }
 
 function formatToolResult(tool, result) {
   if (!result) return null;
   if (result.error) return result.error;
   if (tool === 'list_spaces') {
-    return Array.isArray(result) && result.length ? result.map((s) => s.name).join('、') : '还没有记录';
+    return Array.isArray(result) && result.length ? result.map((s) => s.name).join('、') : t('wf_no_records');
   }
   if (tool === 'list_positions') {
-    return Array.isArray(result) && result.length ? result.map((p) => `${p.name}(${p.item_count}件)`).join('、') : '暂无位置';
+    return Array.isArray(result) && result.length ? result.map((p) => `${p.name}(${p.item_count})`).join('、') : t('wf_no_positions');
   }
   if (tool === 'get_position_items') {
-    return `${(result.items || []).length} 件物品`;
+    return t('wf_items_count', { count: (result.items || []).length });
   }
-  if (tool === 'search_items') return `找到 ${result.count || 0} 条记录`;
-  if (tool === 'view_photo' || tool === 'view_position_photo') return '已查看';
-  if (tool === 'save_items') return '已整理成记录草稿';
-  if (tool === 'update_item') return '已修改';
-  if (tool === 'update_position') return result.new_name ? `已改为"${result.new_name}"` : '已修正';
-  if (tool === 'delete_item') return '已删除';
-  if (tool === 'submit_feedback') return '已记录，会转给开发团队';
+  if (tool === 'search_items') return t('wf_found_count', { count: result.count || 0 });
+  if (tool === 'view_photo' || tool === 'view_position_photo') return t('wf_viewed');
+  if (tool === 'save_items') return t('wf_draft_ready');
+  if (tool === 'update_item') return t('wf_updated');
+  if (tool === 'update_position') return result.new_name ? t('wf_renamed_to', { name: result.new_name }) : t('wf_fixed');
+  if (tool === 'delete_item') return t('wf_deleted');
+  if (tool === 'submit_feedback') return t('wf_feedback_logged');
   return null;
 }
 
