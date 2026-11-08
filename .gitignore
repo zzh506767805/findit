@@ -17,3 +17,8 @@ design-drafts/
 assistant-*-verify.png
 apps/mobile/assets/icon-options/
 apps/mobile/assets/home-space-card-a_2.jpg
+
+# Cloudflare migration backups and local runtime secrets
+.migration/
+.wrangler/
+.dev.vars*

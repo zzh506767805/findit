@@ -1,3 +1,4 @@
+import { setMediaSession } from './src/media-auth';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -38,6 +39,7 @@ async function loadSession() {
 }
 
 async function clearSession() {
+  setMediaSession('',null);
   if (isWeb) { try { localStorage.removeItem('findit_session'); } catch {} }
   else { await SecureStore.deleteItemAsync('findit_session'); }
 }
@@ -127,6 +129,7 @@ export default function App() {
 
     loadSession().then(async (session) => {
       if (session?.token && session?.user) {
+        setMediaSession(apiUrl,session.token);
         setToken(session.token);
         setUser(session.user);
         try {
@@ -201,6 +204,7 @@ export default function App() {
   const [pendingMedia, setPendingMedia] = useState(null);
 
   function handleLogin(data) {
+    setMediaSession(apiUrl,data.token);
     setToken(data.token);
     setUser(data.user);
     setCredits(data.credits);

@@ -1,3 +1,6 @@
+import { cloudflareEnv } from './cloudflare/runtime.js';
+import { d1Query } from './cloudflare/database.js';
+import * as cfAtomic from './cloudflare/atomic.js';
 import pg from 'pg';
 import { randomBytes, randomUUID } from 'node:crypto';
 
@@ -23,6 +26,7 @@ export function newId() {
 }
 
 async function query(sql, params) {
+  if (cloudflareEnv()) return d1Query(sql, params);
   const result = await pool().query(sql, params);
   return result.rows;
 }
@@ -105,6 +109,8 @@ async function ensureInviteCode(userId) {
         [code, userId]
       );
       if (rows.length) return rows[0].invite_code;
+      const concurrent = await query('SELECT invite_code FROM users WHERE id = $1', [userId]);
+      if (concurrent[0]?.invite_code) return concurrent[0].invite_code;
     } catch (err) {
       if (err.code !== '23505') throw err;
     }
@@ -172,6 +178,7 @@ export async function touchUserSeen(userId, { ip, language } = {}) {
 }
 
 export async function deleteUserAccount(userId) {
+  if (cloudflareEnv()) return cfAtomic.deleteAccount(userId);
   const client = await pool().connect();
   try {
     await client.query('BEGIN');
@@ -231,6 +238,7 @@ export async function getUserBenefits(userId) {
 }
 
 export async function claimWelcomeBenefit(userId) {
+  if (cloudflareEnv()) { const granted = await cfAtomic.welcome(userId); return { granted, credits: await getUserCredits(userId), benefits: await getUserBenefits(userId) }; }
   const client = await pool().connect();
   try {
     await client.query('BEGIN');
@@ -287,6 +295,7 @@ export async function redeemInviteCode(userId, inviteCodeInput) {
 
   await ensureInviteCode(userId);
 
+  if (cloudflareEnv()) { await cfAtomic.invite(userId, inviteCode); return { credits: await getUserCredits(userId), benefits: await getUserBenefits(userId) }; }
   const client = await pool().connect();
   try {
     await client.query('BEGIN');
@@ -477,6 +486,7 @@ async function applyAnnualSubscription(client, userId, { credits, productId, exp
 }
 
 export async function activateAnnualSubscription(userId, purchase) {
+  if (cloudflareEnv()) { await cfAtomic.annual(userId, purchase, false); return getUserCredits(userId); }
   const client = await pool().connect();
   try {
     await client.query('BEGIN');
@@ -492,6 +502,7 @@ export async function activateAnnualSubscription(userId, purchase) {
 }
 
 export async function recordIapAnnualPurchase(userId, purchase) {
+  if (cloudflareEnv()) { const result = await cfAtomic.annual(userId, purchase); return { ...result, credits: await getUserCredits(userId) }; }
   const client = await pool().connect();
   try {
     await client.query('BEGIN');
@@ -741,6 +752,7 @@ export async function createMediaAsset(id, userId, blobUrl, contentType, thumbna
 // ─── Search (for agent tools) ───
 
 export async function searchItems(userId, queryText) {
+  if (cloudflareEnv()) return query(`SELECT item_name,description,location_path,recorded_at,media_asset_id FROM (SELECT i.name AS item_name,i.description,s.name || ' / ' || p.name AS location_path,ir.recorded_at,ir.media_asset_id,ROW_NUMBER() OVER(PARTITION BY i.id ORDER BY ir.recorded_at DESC) AS rank FROM item_records ir JOIN items i ON ir.item_id=i.id JOIN positions p ON ir.position_id=p.id JOIN spaces s ON p.space_id=s.id WHERE ir.user_id=$1 AND (lower(i.name) LIKE $2 OR lower(COALESCE(i.description,'')) LIKE $2)) WHERE rank=1 LIMIT 10`, [userId, `%${queryText.toLowerCase()}%`]);
   const q = `%${queryText.toLowerCase()}%`;
   return query(`
     SELECT DISTINCT ON (i.id) i.name AS item_name, i.description,
@@ -1062,7 +1074,8 @@ export async function deleteItem(userId, itemNameOrId) {
 
 // ─── Transactional Confirm ───
 
-export async function confirmAndSave(userId, suggestion, mediaAssetId) {
+export async function confirmAndSave(userId, suggestion, mediaAssetId, requestKey) {
+  if (cloudflareEnv()) return cfAtomic.confirm(userId, suggestion, mediaAssetId, requestKey || mediaAssetId);
   const client = await pool().connect();
   try {
     await client.query('BEGIN');

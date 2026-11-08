@@ -1,3 +1,5 @@
+import { cloudflareEnv } from './cloudflare/runtime.js';
+import { putMedia, signedMedia, mediaBytes } from './cloudflare/media.js';
 import { BlobServiceClient, StorageSharedKeyCredential, generateBlobSASQueryParameters, BlobSASPermissions } from '@azure/storage-blob';
 
 let _blobCredential;
@@ -21,6 +23,7 @@ export function getBlobUrl(blobName) {
 }
 
 export function getBlobSasUrl(blobUrl) {
+  if (cloudflareEnv()) return signedMedia(blobUrl);
   if (!blobUrl || !blobUrl.startsWith('https://')) return blobUrl;
   if (!_blobCredential) getBlobServiceClient();
   if (!_blobCredential) return blobUrl;
@@ -40,6 +43,7 @@ export function getBlobSasUrl(blobUrl) {
 }
 
 export async function uploadToBlob(buffer, blobName, contentType) {
+  if (cloudflareEnv()) return putMedia(buffer, blobName, contentType);
   const client = getBlobServiceClient();
   const container = process.env.AZURE_STORAGE_CONTAINER || 'data';
   const blockBlob = client.getContainerClient(container).getBlockBlobClient(blobName);
@@ -47,4 +51,11 @@ export async function uploadToBlob(buffer, blobName, contentType) {
     blobHTTPHeaders: { blobContentType: contentType }
   });
   return getBlobUrl(blobName);
+}
+
+export async function readMediaBytes(url) {
+  if (cloudflareEnv()) return mediaBytes(url);
+  const response = await fetch(getBlobSasUrl(url));
+  if (!response.ok) throw new Error(`Media fetch failed: ${response.status}`);
+  return Buffer.from(await response.arrayBuffer());
 }

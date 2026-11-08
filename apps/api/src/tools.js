@@ -1,3 +1,5 @@
+import { requestRuntime } from './cloudflare/runtime.js';
+import { findJob } from './cloudflare/jobs.js';
 import { getSpacesList, getSpaceByName, getPositionsBySpaceName, getPositionItems, getMediaAsset, getLatestMediaAssetForPosition, searchItems, updateItem, deleteItem, findPositionsByName, updatePosition, movePositionToSpace, findOrCreateSpace, createFeedback } from './store.js';
 
 export const toolDefinitions = [
@@ -152,9 +154,11 @@ export const toolDefinitions = [
 ];
 
 export async function executeTool(toolName, args, userId, uploadDir) {
+  const task = requestRuntime.getStore()?.job;
+  if (task && (await findJob(userId,task.id))?.status !== 'PROCESSING') throw new Error('Task no longer active');
   function formatMediaView(asset, question, extra = {}) {
     const isVideo = asset.content_type?.startsWith('video/');
-    const viewUrl = isVideo ? asset.thumbnail_url : asset.blob_url;
+    const viewUrl = isVideo ? asset.thumbnail_url : (asset.ai_media_url || asset.blob_url);
     if (!viewUrl) return { error: '这段视频还没有可查看的预览图' };
     return {
       type: isVideo ? 'video_preview' : 'image',
@@ -163,7 +167,7 @@ export async function executeTool(toolName, args, userId, uploadDir) {
       thumbnail_url: asset.thumbnail_url,
       preview_url: asset.thumbnail_url || viewUrl,
       original_blob_url: asset.blob_url,
-      content_type: asset.content_type,
+      content_type: isVideo || asset.ai_media_url ? 'image/jpeg' : asset.content_type,
       question,
       ...extra
     };

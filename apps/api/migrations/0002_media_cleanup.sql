@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS media_deletions(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,keys_json TEXT NOT NULL,created_at TEXT NOT NULL);

@@ -2,7 +2,7 @@
   "expo": {
     "name": "放哪了",
     "slug": "findit",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": false,
       "icon": "./assets/icon.png",
-      "buildNumber": "14",
+      "buildNumber": "15",
       "infoPlist": {
         "CFBundleDisplayName": "放哪了",
         "NSCameraUsageDescription": "用于拍摄你主动记录的收纳照片或视频，例如记录抽屉、柜子或房间里的物品位置。",
@@ -25,7 +25,8 @@
         "NSMicrophoneUsageDescription": "用于录制你主动拍摄的收纳视频中的声音，例如边拍柜子或抽屉边说明物品位置。",
         "ITSAppUsesNonExemptEncryption": false
       },
-      "bundleIdentifier": "top.fangnale"
+      "bundleIdentifier": "top.fangnale",
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "top.fangnale",
@@ -45,7 +46,8 @@
     "plugins": [
       "expo-secure-store",
       "expo-asset",
-      "expo-localization"
+      "expo-localization",
+      "expo-apple-authentication"
     ]
   }
 }

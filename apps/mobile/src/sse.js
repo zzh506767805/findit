@@ -1,3 +1,6 @@
+import { prepareMedia, uploadMediaFile } from './prepare-media';
+import { requestJson, requestLanguage } from './api';
+import { Platform } from 'react-native';
 function createSseHandler(xhr, onEvent, resolve, reject) {
   let lastIndex = 0;
   let buffer = '';
@@ -95,6 +98,7 @@ export function streamAgent(apiUrl, token, path, body, onEvent) {
     const xhr = new XMLHttpRequest();
     createSseHandler(xhr, onEvent, resolve, reject);
     xhr.open('POST', `${apiUrl}${path}`, true);
+    xhr.setRequestHeader('Accept-Language',requestLanguage());
     xhr.setRequestHeader('Content-Type', 'application/json');
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     xhr.send(JSON.stringify(body));
@@ -126,6 +130,7 @@ export function streamAgentUpload(apiUrl, token, path, fileUriOrBlob, mimeType, 
 }
 
 export function streamAgentUploadBatch(apiUrl, token, path, files, onEvent, fields = {}) {
+  if (!__DEV__ || !/:4000(?:\/|$)/.test(apiUrl)) return cloudUpload(apiUrl,token,path,files,onEvent,fields);
   return new Promise(async (resolve, reject) => {
     const formData = new FormData();
     appendUploadFields(formData, fields);
@@ -136,8 +141,28 @@ export function streamAgentUploadBatch(apiUrl, token, path, files, onEvent, fiel
     const xhr = new XMLHttpRequest();
     createSseHandler(xhr, onEvent, resolve, reject);
     xhr.open('POST', `${apiUrl}${path}`, true);
+    xhr.setRequestHeader('Accept-Language',requestLanguage());
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
     // Do NOT set Content-Type for FormData — XHR sets multipart boundary automatically
     xhr.send(formData);
   });
+}
+
+async function cloudUpload(apiUrl,token,path,files,onEvent,fields) {
+ const prepared=[];
+ for(const file of files)prepared.push(await prepareMedia(file));
+ const requestKey=`media_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+ const job=await requestJson('/agent/uploads',{apiUrl,token,method:'POST',body:{request_key:requestKey}});
+ const uploads=[];
+ try {
+ for(let i=0;i<prepared.length;i++) {
+  const m=prepared[i];const original=await uploadMediaFile(apiUrl,token,job.id,`file_${i}`,m.original,m.mimeType);
+  const thumbnail=await uploadMediaFile(apiUrl,token,job.id,`thumb_${i}`,m.thumbnail,'image/jpeg');
+  const aiImage=m.aiImage?(await uploadMediaFile(apiUrl,token,job.id,`ai_${i}`,m.aiImage,'image/jpeg')).key:null;
+  const frames=[];
+  for(let j=0;j<m.frames.length;j++)frames.push((await uploadMediaFile(apiUrl,token,job.id,`frame_${i}_${j}`,m.frames[j],'image/jpeg')).key);
+  uploads.push({key:original.key,thumbnail:thumbnail.key,ai_image:aiImage,frames});
+ }
+ } catch(error) {await requestJson(`/agent/jobs/${job.id}/cancel`,{apiUrl,token,method:'POST'}).catch(()=>{});throw error;}
+ return streamAgent(apiUrl,token,path,{...fields,job_id:job.id,request_key:requestKey,uploads},onEvent);
 }

@@ -1,3 +1,4 @@
+import { cloudflareEnv } from './cloudflare/runtime.js';
 import { readFile, writeFile, rm, mkdir } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -5,7 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { toolDefinitions, executeTool } from './tools.js';
-import { getBlobSasUrl } from './blob.js';
+import { getBlobSasUrl, readMediaBytes } from './blob.js';
 import { getSpacesList, getPositionsBySpaceName } from './store.js';
 import { inferSpaceNameForPosition, isLikelyPositionName } from './locationRules.js';
 
@@ -310,6 +311,7 @@ function imageExtensionFromMime(mimeType) {
 }
 
 async function compressImageBase64(base64Str, mimeType = 'image/jpeg', maxDim = 1024, quality = 80) {
+  if (cloudflareEnv()) return base64Str;
   if (typeof mimeType === 'number') {
     maxDim = mimeType;
     mimeType = 'image/jpeg';
@@ -412,6 +414,7 @@ async function buildAnalyzeMediaContent(mediaInputs, spaceContext, query, userLa
 
 export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames, mediaInputs, mimeType, userId, uploadDir, onEvent, previousResponseId, spaceHint, userLanguage }) {
   if (!hasAzureConfig()) {
+    if (cloudflareEnv()) throw new Error('AI service is not configured');
     return runMockAgent({ mode, query, imageBase64, userId, onEvent });
   }
 
@@ -522,19 +525,17 @@ export async function runAgent({ mode, query, imageBase64, blobUrl, videoFrames,
           try {
             let imageContent;
             if (viewResult.blob_url.startsWith('https://')) {
-              const imageRes = await fetch(getBlobSasUrl(viewResult.blob_url));
-              if (!imageRes.ok) throw new Error(`Failed to fetch blob: ${imageRes.status}`);
-              const imageBuffer = Buffer.from(await imageRes.arrayBuffer());
+              const imageBuffer = await readMediaBytes(viewResult.blob_url);
               const base64 = await compressImageBase64(
                 imageBuffer.toString('base64'),
                 viewResult.content_type || 'image/jpeg'
               );
-              imageContent = buildImageInput(base64, 'image/jpeg');
+              imageContent = buildImageInput(base64, cloudflareEnv() ? (viewResult.content_type || 'image/jpeg') : 'image/jpeg');
             } else {
               const filePath = path.join(uploadDir, path.basename(viewResult.blob_url));
               const fileData = await readFile(filePath);
               const base64 = await compressImageBase64(fileData.toString('base64'));
-              imageContent = buildImageInput(base64, 'image/jpeg');
+              imageContent = buildImageInput(base64, cloudflareEnv() ? (viewResult.content_type || 'image/jpeg') : 'image/jpeg');
             }
             // Return tool output as string, then append image as user message
             toolOutputs.push({

@@ -1,3 +1,6 @@
+import { handleCloudAgent } from './cloudflare/agent.js';
+import { cloudflareEnv, isCloudflare, requestRuntime } from './cloudflare/runtime.js';
+import { putMedia, objectKey, mediaBytes, signedMedia } from './cloudflare/media.js';
 import { createServer } from 'node:http';
 import { createHmac, timingSafeEqual, createPublicKey } from 'node:crypto';
 import { readFile, mkdir, writeFile, rm } from 'node:fs/promises';
@@ -27,7 +30,7 @@ import {
   touchUserSeen
 } from './store.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __dirname = isCloudflare() ? '/' : path.dirname(fileURLToPath(import.meta.url));
 const API_DIR = path.resolve(__dirname, '..');
 const UPLOAD_DIR = path.join(API_DIR, 'data/uploads');
 
@@ -49,7 +52,7 @@ async function loadEnvFile() {
   } catch {}
 }
 
-await loadEnvFile();
+if (!isCloudflare() && process.env.FINDIT_MODULE_ONLY !== '1') await loadEnvFile();
 
 const PORT = Number(process.env.PORT || 4000);
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
@@ -57,7 +60,7 @@ const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Idempotency-Key, X-Upload-Size',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS'
   };
 }
@@ -182,15 +185,22 @@ function receiptTimestamp(item) {
   return Number(item?.expires_date_ms || item?.purchase_date_ms || item?.original_purchase_date_ms || 0);
 }
 
+async function receiptFetch(url, body) {
+  let timer;
+  const options={method:'POST',headers:{'Content-Type':'application/json'},body};
+  const request=new Request(url,options);
+  try { return await Promise.race([fetch(request),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Apple receipt verification timed out')),20000);})]); } finally {clearTimeout(timer);}
+}
+
 async function verifyAppleReceipt(receiptData) {
   const body = JSON.stringify({ 'receipt-data': receiptData, password: IAP_SHARED_SECRET });
 
-  let res = await fetch(APPLE_VERIFY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+  let res = await receiptFetch(APPLE_VERIFY_URL,body);
   let result = await res.json();
 
   // Status 21007 means it's a sandbox receipt
   if (result.status === 21007) {
-    res = await fetch(APPLE_SANDBOX_VERIFY_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    res = await receiptFetch(APPLE_SANDBOX_VERIFY_URL,body);
     result = await res.json();
   }
 
@@ -216,6 +226,10 @@ async function verifyAppleReceipt(receiptData) {
 }
 
 function addSasToUrls(data) {
+  if (cloudflareEnv()) {
+    function sign(value) { if (typeof value === 'string') return objectKey(value) ? signedMedia(value) : value; if (Array.isArray(value)) return value.map(sign); if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,sign(v)])); return value; }
+    return sign(data);
+  }
   if (!process.env.AZURE_STORAGE_KEY) return data;
   const json = JSON.stringify(data);
   const blobBase = `https://${process.env.AZURE_STORAGE_ACCOUNT}.blob.core.windows.net/`;
@@ -267,8 +281,9 @@ function sendHtml(res, title, body) {
 
 function sendSupportPage(res) {
   sendHtml(res, '放哪了—AI收纳师｜支持', `
-    <h1>放哪了—AI收纳师支持</h1>
-    <p class="muted">更新日期：2026年6月29日</p>
+    <h1>放哪了—AI收纳师支持 / FindIt Support</h1>
+    <p>FindIt helps you record your belongings with photos or short videos and find them later. Check AI drafts before saving. For subscription issues, use Restore Purchases in the app. Contact <a href="mailto:zzh506767805@gmail.com">zzh506767805@gmail.com</a>.</p>
+    <p class="muted">更新日期：2026年11月9日</p>
     <p>放哪了—AI收纳师用于通过拍照或录像记录家中物品位置，并在需要时帮助查询物品所在位置。</p>
     <h2>常见问题</h2>
     <ul>
@@ -285,8 +300,9 @@ function sendSupportPage(res) {
 
 function sendPrivacyPage(res) {
   sendHtml(res, '放哪了—AI收纳师｜隐私政策', `
-    <h1>隐私政策</h1>
-    <p class="muted">更新日期：2026年5月17日</p>
+    <h1>隐私政策 / Privacy Policy</h1>
+    <p>FindIt uses your Apple account details, photos/videos, item records, chats and purchase receipts to provide its features. Cloudflare hosts the database and private media storage; Azure OpenAI processes content for recognition and search. We do not sell personal information. You can delete your account and associated content in the app. Contact zzh506767805@gmail.com for privacy questions.</p>
+    <p class="muted">更新日期：2026年11月9日</p>
     <p>本隐私政策说明“放哪了—AI收纳师”如何收集、使用和保护你的信息。</p>
     <h2>我们收集的信息</h2>
     <ul>
@@ -302,7 +318,7 @@ function sendPrivacyPage(res) {
       <li>改进稳定性、排查故障并保障服务安全。</li>
     </ul>
     <h2>第三方服务</h2>
-    <p>为提供服务，我们会使用 Apple 登录和 App 内购买能力、云数据库与对象存储服务，以及 AI 图像/文本分析服务。你上传的内容可能会被发送至这些服务用于完成识别和查询。</p>
+    <p>为提供服务，我们会使用 Apple 登录和 App 内购买能力、Cloudflare 云数据库与私有对象存储服务，以及 Azure OpenAI 图像/文本分析服务。你上传的内容可能会被发送至这些服务用于完成识别和查询。</p>
     <h2>数据共享</h2>
     <p>我们不会出售你的个人信息。除提供服务、遵守法律要求、处理安全风险或经你同意外，我们不会向无关第三方披露你的个人信息。</p>
     <h2>数据保存与删除</h2>
@@ -316,8 +332,9 @@ function sendPrivacyPage(res) {
 
 function sendTermsPage(res) {
   sendHtml(res, '放哪了—AI收纳师｜用户协议', `
-    <h1>用户协议</h1>
-    <p class="muted">更新日期：2026年6月29日</p>
+    <h1>用户协议 / Terms of Use</h1>
+    <p>FindIt provides AI-assisted home inventory and search. AI results may be inaccurate; review them before saving. Annual subscriptions renew automatically unless cancelled in your Apple account settings. Prices and membership benefits are displayed before purchase. Restore Purchases is available in the app. You remain responsible for content you upload and can request account deletion in the app.</p>
+    <p class="muted">更新日期：2026年11月9日</p>
     <p>使用放哪了—AI收纳师即表示你同意本协议。</p>
     <h2>服务说明</h2>
     <p>本 App 提供家庭物品拍照/录像记录、AI 识别、空间位置管理和物品查询功能。AI 结果可能存在错误，请以实际情况为准。</p>
@@ -335,7 +352,7 @@ function sendTermsPage(res) {
 function redirectMedia(res, location) {
   res.writeHead(302, {
     Location: location,
-    'Cache-Control': 'public, max-age=1800',
+    'Cache-Control': cloudflareEnv() ? 'private, max-age=300' : 'public, max-age=1800',
     ...corsHeaders()
   });
   res.end();
@@ -399,6 +416,7 @@ function touchUserStats(req, userId) {
 // ─── Azure Blob Storage (see blob.js) ───
 
 async function saveBufferWithName(buffer, blobName, contentType) {
+  if (cloudflareEnv()) return putMedia(buffer, blobName, contentType);
   if (process.env.AZURE_STORAGE_ACCOUNT) {
     await uploadToBlob(buffer, blobName, contentType);
     return getBlobUrl(blobName); // permanent URL for DB
@@ -619,7 +637,7 @@ async function saveUploadedFile(fileData) {
   return { mediaId, blobUrl, contentType: normalized.contentType, isVideo, buffer: normalized.buffer, thumbnailUrl };
 }
 
-async function route(req, res) {
+export async function route(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const method = req.method || 'GET';
   const startTime = Date.now();
@@ -667,6 +685,13 @@ async function route(req, res) {
     const [, mediaId, variant] = url.pathname.match(/^\/media\/([^/]+)\/(thumb|original)$/);
     const asset = await getMediaAssetById(mediaId);
     if (!asset) return sendJson(res, 404, { error: 'Media not found', code: 'NOT_FOUND' });
+    if (cloudflareEnv()) {
+      const env = cloudflareEnv();
+      const owner = verifyToken((req.headers.authorization || '').replace(/^Bearer /,''));
+      const legacy = env.LEGACY_PROXY_SECRET && req.headers['x-legacy-proxy-secret'] === env.LEGACY_PROXY_SECRET;
+      if (!owner && !legacy) return sendJson(res,401,{error:'Login required'});
+      if (owner && asset.user_id !== owner) return sendJson(res,404,{error:'Media not found'});
+    }
 
     // thumb 缺失时图片资产回退原图（视频不能当图片渲染，仍返回 404）
     const isVideoAsset = (asset.content_type || '').startsWith('video');
@@ -740,6 +765,7 @@ async function route(req, res) {
 
   const user = await requireUser(getUserId(req));
   touchUserStats(req, user.id);
+  if (cloudflareEnv() && ((method === 'GET' && url.pathname.startsWith('/agent/jobs/')) || (method === 'POST' && (['/agent/uploads','/agent/analyze','/agent/query'].includes(url.pathname) || (url.pathname.startsWith('/agent/jobs/') && url.pathname.endsWith('/cancel')))))) return handleCloudAgent(req,res,url,user,{readJson,sendJson,sendSse,parseLanguage,clientDayFromRequest});
 
   if (method === 'GET' && url.pathname === '/user/credits') {
     const credits = await getUserCredits(user.id);
@@ -1166,7 +1192,7 @@ async function route(req, res) {
     const { suggestion, media_asset_id, message_id } = body;
     if (!suggestion) return sendJson(res, 400, { error: 'suggestion is required', code: 'INVALID_REQUEST' });
 
-    const result = await confirmAndSave(user.id, suggestion, media_asset_id);
+    const result = await confirmAndSave(user.id, suggestion, media_asset_id, message_id);
     if (message_id) await updateMessageConfirmed(message_id, user.id);
     return sendJson(res, 200, result);
   }
@@ -1174,10 +1200,10 @@ async function route(req, res) {
   return sendJson(res, 404, { error: 'Not found', code: 'NOT_FOUND' });
 }
 
-await initConversationTables().catch(err => console.warn('DB table init:', err.message));
+if (!isCloudflare() && process.env.FINDIT_MODULE_ONLY !== '1') await initConversationTables().catch(err => console.warn('DB table init:', err.message));
 
-const server = createServer((req, res) => {
-  route(req, res).catch((error) => {
+export const server = isCloudflare() ? null : createServer((req, res) => {
+  const operation = route(req, res).catch((error) => {
     const status = error.status || 500;
     if (!res.headersSent) {
       sendJson(res, status, {
@@ -1188,9 +1214,12 @@ const server = createServer((req, res) => {
       try { sendSse(res, 'error', { error: error.message }); res.end(); } catch {}
     }
   });
+  requestRuntime.getStore()?.ctx?.waitUntil(operation);
 });
 
-server.listen(PORT, '0.0.0.0', () => {
+if (!isCloudflare() && process.env.FINDIT_MODULE_ONLY !== '1') server.listen(PORT, '0.0.0.0', () => {
   console.log(`FindIt API listening on http://0.0.0.0:${PORT}`);
   console.log(`Azure config: ${JSON.stringify(getAzureConfigStatus())}`);
 });
+
+export { parseMultipart, normalizeImageForStorage, createImageThumbnailBuffer, extractVideoFrames, verifyToken };

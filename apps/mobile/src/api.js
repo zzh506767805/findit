@@ -1,7 +1,9 @@
+import { getLocales } from 'expo-localization';
+import { setMediaSession } from './media-auth';
 import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
-const PRODUCTION_API = 'https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io';
+const PRODUCTION_API = 'https://findit-api.dressmeai.com';
 
 export function getDefaultApiUrl() {
   const configured = process.env.EXPO_PUBLIC_API_URL;
@@ -21,11 +23,15 @@ export function getDefaultApiUrl() {
   return PRODUCTION_API;
 }
 
+export function requestLanguage() { return getLocales()[0]?.languageTag || 'en'; }
+
 export async function requestJson(path, { apiUrl, token, method = 'GET', body } = {}) {
+  if (token) setMediaSession(apiUrl,token);
   const response = await fetch(`${apiUrl}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
+      'Accept-Language': requestLanguage(),
       ...(token ? { Authorization: `Bearer ${token}` } : {})
     },
     body: body ? JSON.stringify(body) : undefined

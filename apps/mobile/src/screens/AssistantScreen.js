@@ -434,7 +434,7 @@ export default function AssistantScreen({ session, onDataChanged, credits, isAct
           const resp = await fetch(item.asset.uri);
           fileData = await resp.blob();
         }
-        uploadFiles.push({ fileUriOrBlob: fileData, mimeType: item.mimeType });
+        uploadFiles.push({ fileUriOrBlob: fileData, mimeType: item.mimeType, duration: item.asset.duration });
       }
       await streamAgentUploadBatch(
         session.apiUrl,

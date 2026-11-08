@@ -1,14 +1,14 @@
 {
   "configVersion": 0,
   "apple": {
-    "version": "1.0.0",
+    "version": "1.0.3",
     "copyright": "© 2026 Zihao Zhao",
     "release": {
-      "automaticRelease": false
+      "automaticRelease": true
     },
     "info": {
       "zh-Hans": {
-        "description": "放哪了—AI收纳师是一款面向家庭收纳的记录和查找工具。你可以给房间、柜子、抽屉等位置拍照或录像，App 会帮你识别其中的物品，并将它们整理到对应空间里。之后只要输入“护照放在哪里”“备用电池在哪个抽屉”，就能快速查询记录。\n\n主要功能：\n- 拍照或录像记录物品和位置\n- 按空间、位置浏览家中物品\n- 用文字询问物品所在位置\n- 支持编辑、删除识别结果，保持记录准确\n- Apple 登录和 App 内购买\n- 新用户可获得基础体验次数，会员可获得更多识别额度\n\n会员说明：\n- 标准版：一年自动续订会员，适合多数家庭，支持持续拍照或录像识别、保存物品位置和文字查找。\n- 大户型版：一年自动续订会员，适合多房间或物品更多的家庭，包含更多媒体识别额度和完整查找功能。\n\n适合：\n- 经常忘记物品放在哪里\n- 搬家、整理后需要重新建立位置记录\n- 想给家里的储物柜、抽屉、箱子做轻量索引\n\n说明：AI 识别可能存在误差，建议在保存前检查和修正结果。照片、视频和物品记录会用于提供识别、存储和查询功能。\n\n隐私政策：https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/privacy\n用户协议：https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/terms",
+        "description": "放哪了—AI收纳师是一款面向家庭收纳的记录和查找工具。你可以给房间、柜子、抽屉等位置拍照或录像，App 会帮你识别其中的物品，并将它们整理到对应空间里。之后只要输入“护照放在哪里”“备用电池在哪个抽屉”，就能快速查询记录。\n\n主要功能：\n- 拍照或录像记录物品和位置\n- 按空间、位置浏览家中物品\n- 用文字询问物品所在位置\n- 支持编辑、删除识别结果，保持记录准确\n- Apple 登录和 App 内购买\n- 新用户可获得基础体验次数，会员可获得更多识别额度\n\n会员说明：\n- 标准版：一年自动续订会员，适合多数家庭，支持持续拍照或录像识别、保存物品位置和文字查找。\n- 大户型版：一年自动续订会员，适合多房间或物品更多的家庭，包含更多媒体识别额度和完整查找功能。\n\n适合：\n- 经常忘记物品放在哪里\n- 搬家、整理后需要重新建立位置记录\n- 想给家里的储物柜、抽屉、箱子做轻量索引\n\n说明：AI 识别可能存在误差，建议在保存前检查和修正结果。照片、视频和物品记录会用于提供识别、存储和查询功能。\n\n隐私政策：https://findit-api.dressmeai.com/privacy\n用户协议：https://findit-api.dressmeai.com/terms",
         "keywords": [
           "收纳",
           "整理",
@@ -22,15 +22,20 @@
           "清单",
           "家庭"
         ],
-        "marketingUrl": "https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/support",
+        "releaseNotes": "- 优化照片和视频上传、识别体验\n- 提升物品记录保存与查找稳定性\n- 优化登录和会员恢复",
+        "marketingUrl": "https://findit-api.dressmeai.com/support",
         "promoText": "拍照或录像记录家中物品位置，用 AI 帮你整理空间、查找物品。",
-        "supportUrl": "https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/support",
+        "supportUrl": "https://findit-api.dressmeai.com/support",
         "title": "放哪了—AI收纳师",
         "subtitle": "拍照记录，随时找到",
-        "privacyPolicyUrl": "https://findit-api.livelysky-debdec5e.japaneast.azurecontainerapps.io/privacy",
+        "privacyPolicyUrl": "https://findit-api.dressmeai.com/privacy",
         "screenshots": {
           "APP_IPHONE_65": [
             "store/apple/screenshot/zh-Hans/APP_IPHONE_65/01-spaces-6.5.png",
+            "store/apple/screenshot/zh-Hans/APP_IPHONE_65/08-recall-with-photo-6.5.png",
+            "store/apple/screenshot/zh-Hans/APP_IPHONE_65/07-recognition-draft-6.5.png",
+            "store/apple/screenshot/zh-Hans/APP_IPHONE_65/05-bedroom-detail-6.5.png",
+            "store/apple/screenshot/zh-Hans/APP_IPHONE_65/04-onboarding-6.5.png",
             "store/apple/screenshot/zh-Hans/APP_IPHONE_65/02-assistant-6.5.png",
             "store/apple/screenshot/zh-Hans/APP_IPHONE_65/03-paywall-6.5.png"
           ],
@@ -38,6 +43,34 @@
             "store/apple/screenshot/zh-Hans/APP_IPAD_PRO_3GEN_129/02-assistant-ipad-12.9.png",
             "store/apple/screenshot/zh-Hans/APP_IPAD_PRO_3GEN_129/03-paywall-ipad-12.9.png",
             "store/apple/screenshot/zh-Hans/APP_IPAD_PRO_3GEN_129/01-spaces-ipad-12.9.png"
+          ]
+        }
+      },
+      "en-US": {
+        "description": "Find It helps you remember where everything at home belongs.\n\nTake a photo or video of a room, cabinet, drawer, shelf, or storage box. AI identifies visible items and organizes them by room and location. Later, simply ask “Where is my passport?” or “Which drawer has the spare batteries?” to find the saved record.\n\nWHAT YOU CAN DO\n• Log belongings with photos or videos\n• Browse items by room and storage spot\n• Ask where an item is in plain language\n• Review and edit AI suggestions before saving\n• Correct, rename, move, or delete saved records\n• Sign in securely with Apple\n\nBUILT FOR REAL HOMES\nUse Find It after organizing, moving, or tidying up—or whenever you want a lightweight visual index of cabinets, drawers, boxes, and shelves.\n\nMEMBERSHIP\nFind It includes a basic experience for new users. Annual memberships support continued photo and video recognition:\n• Standard: designed for most homes\n• Large Home: designed for homes with more rooms and belongings\n\nText-only search remains available without using photo or video recognition. Subscriptions renew automatically unless canceled in Apple ID subscription settings.\n\nAI recognition may make mistakes. Please review suggestions before saving. Photos, videos, and item records are used to provide recognition, storage, and search features.\n\nPrivacy Policy: https://findit-api.dressmeai.com/privacy\nTerms of Service: https://findit-api.dressmeai.com/terms",
+        "keywords": [
+          "home organizer",
+          "find items",
+          "storage",
+          "declutter",
+          "inventory",
+          "photo organizer",
+          "AI",
+          "household",
+          "where is it"
+        ],
+        "releaseNotes": "- Improved photo and video uploads and recognition.\n- More reliable saving and searching of item records.\n- Improved sign-in and purchase restoration.",
+        "marketingUrl": "https://findit-api.dressmeai.com/support",
+        "promoText": "Snap a photo or video, let AI organize what’s there, and find anything later by simply asking where it is.",
+        "supportUrl": "https://findit-api.dressmeai.com/support",
+        "title": "Find It: AI Home Organizer",
+        "subtitle": "Snap, organize, find anything",
+        "privacyPolicyUrl": "https://findit-api.dressmeai.com/privacy",
+        "screenshots": {
+          "APP_IPHONE_65": [
+            "store/apple/screenshot/en-US/APP_IPHONE_65/01-home-6.5.png",
+            "store/apple/screenshot/en-US/APP_IPHONE_65/02-assistant-6.5.png",
+            "store/apple/screenshot/en-US/APP_IPHONE_65/03-paywall-6.5.png"
           ]
         }
       }

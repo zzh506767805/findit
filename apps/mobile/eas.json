@@ -8,7 +8,11 @@
       "distribution": "internal"
     },
     "production": {
-      "distribution": "store"
+      "distribution": "store",
+      "node": "22.20.0",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://findit-api.dressmeai.com"
+      }
     }
   },
   "submit": {

@@ -10,6 +10,13 @@
     "dev:api": "npm --workspace apps/api run dev",
     "dev:mobile": "npm --workspace apps/mobile run start",
     "dev:mobile:lan": "npm --workspace apps/mobile run start -- --host lan",
-    "check": "npm --workspace apps/api run check && npm --workspace apps/mobile run check"
+    "check": "npm --workspace apps/api run check && npm --workspace apps/mobile run check",
+    "cf:dev": "wrangler dev",
+    "cf:deploy": "wrangler deploy --config wrangler.production.jsonc",
+    "test:cloudflare": "node --test tests/cloudflare/*.test.mjs"
+  },
+  "devDependencies": {
+    "miniflare": "^5.20261104.0-beta",
+    "wrangler": "^4.158.0"
   }
 }

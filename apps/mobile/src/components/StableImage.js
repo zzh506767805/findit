@@ -1,3 +1,4 @@
+import { authorizedImageSource } from '../media-auth';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, StyleSheet, View } from 'react-native';
 
@@ -13,7 +14,7 @@ function sourceKey(source) {
 }
 
 export default function StableImage({ source, uri, style, imageStyle, resizeMode = 'cover', placeholderStyle }) {
-  const nextSource = useMemo(() => source || (uri ? { uri } : null), [source, uri]);
+  const nextSource = useMemo(() => authorizedImageSource(source || (uri ? { uri } : null)), [source, uri]);
   const nextKey = sourceKey(nextSource);
   const initiallyLoaded = Boolean(nextSource && (typeof nextSource === 'number' || loadedSourceKeys.has(nextKey)));
   const [current, setCurrent] = useState(nextSource);

@@ -70,3 +70,14 @@ http://你的电脑局域网 IP:4000
 如果手机连不上，可以点 App 顶部设置按钮，手动改 API 地址。
 
 电脑和手机需要在同一个 Wi-Fi。
+
+## Cloudflare 正式 API（2026-11-09）
+
+正式 API 为 https://findit-api.dressmeai.com，业务使用 Workers + D1 + 私有 R2。旧 Azure Container Apps 地址仅供已安装旧 App 兼容，空闲缩容到 0；旧 PostgreSQL 已只读暂停。新 iOS 1.0.3/build 15 已提交 Apple 审核，批准后自动发布至全部 175 地区。
+
+- 检查：npm run check；Worker 集成：npm run test:cloudflare。
+- 预发布：npx wrangler deploy；正式：npx wrangler deploy --config wrangler.production.jsonc。
+- 媒体通过任务槽位流式上传，原始照片/HEIC/视频完整保存；设备提供 JPEG 识别副本、缩略图及视频帧。
+- 扣次数、Apple 购买、邀请/欢迎权益和确认保存以 D1 原子批处理为准。中断任务幂等退回，账号删除会清理 R2。
+- 备份/密钥仅保存在忽略的 .migration/；迁移过程与回滚见 docs/cloudflare迁移执行记录-2026-11-08.md。
+- 免费容量足够当前规模，CPU 冷启动仍须监控；AI 调用、旧 Azure 按需兼容与保留备份不等于免费。

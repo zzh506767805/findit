@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "findit-api",
+  "main": "apps/api/cloudflare-worker.js",
+  "account_id": "2fd40fedbf8b53361c2f2f8cfd49ba8d",
+  "compatibility_date": "2026-11-08",
+  "compatibility_flags": [
+    "nodejs_compat",
+    "enable_nodejs_http_server_modules"
+  ],
+  "alias": {
+    "pg": "./apps/api/src/cloudflare/pg-stub.js",
+    "@azure/storage-blob": "./apps/api/src/cloudflare/azure-stub.js"
+  },
+  "vars": {
+    "NODE_ENV": "production",
+    "FINDIT_RUNTIME": "cloudflare",
+    "PUBLIC_API_URL": "https://findit-api.dressmeai.com",
+    "MAINTENANCE_MODE": "0",
+    "PORT": "4000"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "findit-production",
+      "database_id": "2a74c5f1-44e9-45d3-8fa6-7f2e49a49439",
+      "migrations_dir": "apps/api/migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "IMAGES",
+      "bucket_name": "findit-images"
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/5 * * * *"
+    ]
+  },
+  "observability": {
+    "enabled": true
+  },
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "findit-api.dressmeai.com/*",
+      "zone_name": "dressmeai.com"
+    }
+  ]
+}
