@@ -1,14 +1,16 @@
 name: Deploy API
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'apps/api/**'
   workflow_dispatch:
+    inputs:
+      restore_azure:
+        description: "Only use after synchronizing data and restoring the old Azure version"
+        type: string
+        required: true
 
 jobs:
   deploy:
+    if: inputs.restore_azure == 'RESTORE'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

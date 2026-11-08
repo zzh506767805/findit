@@ -148,3 +148,5 @@
 - 生产环境秘密通过 wrangler secret bulk 从 .migration/production-secrets.json 上传，绝不放仓库或 App。
 - 旧版入口不能提前删除；所有旧版本仍指向 Azure 原域名。新 App 构建使用自己的 API 域名，照片/视频原件保留，手机生成用于 AI 的副本。
 - 回滚须先同步 D1/R2 上线后增量，再恢复旧数据库写入和 .migration/old-revision-rollback-private.json 对应的旧镜像。不得只改入口或恢复旧快照，否则会丢失新权益/物品。
+
+- 关闭旧 GitHub Azure 自动部署触发，改为受保护的手动回滚；实际禁用远程工作流，防止后续主分支提交把完整旧 API 覆盖兼容入口。代码已提交，推送使用既有代理和 HTTP/1.1。
