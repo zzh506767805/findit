@@ -73,7 +73,7 @@ http://你的电脑局域网 IP:4000
 
 ## Cloudflare 正式 API（2026-11-09）
 
-正式 API 为 https://findit-api.dressmeai.com，业务使用 Workers + D1 + 私有 R2。旧 Azure Container Apps 地址仅供已安装旧 App 兼容，空闲缩容到 0；旧 PostgreSQL 已只读暂停。新 iOS 1.0.3/build 15 已提交 Apple 审核，批准后自动发布至全部 175 地区。
+正式 API 为 https://findit-api.dressmeai.com，业务使用 Workers + D1 + 私有 R2。旧 Azure Container Apps 地址仅供已安装旧 App 兼容，空闲缩容到 0；旧 PostgreSQL 已只读暂停。新 iOS 1.0.3/build 15 已于 2026-11-09 通过 Apple 审核并自动发布，全球销售范围为全部 175 地区，中美商店均已确认新版。
 
 - 检查：npm run check；Worker 集成：npm run test:cloudflare。
 - 预发布：npx wrangler deploy；正式：npx wrangler deploy --config wrangler.production.jsonc。
